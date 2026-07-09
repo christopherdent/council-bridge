@@ -4,29 +4,31 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return;
   }
 
+  if (message?.type === "GET_LATEST_REPLY") {
+    sendResponse({ text: getLatestVisibleReply() });
+    return;
+  }
+
   if (message?.type === "INSERT_TEXT") {
-    insertTextAndSubmitPrompt(message.text || "", {
+    const ok = insertTextIntoPrompt(message.text || "", {
       showAlerts: message.showAlerts !== false
-    }).then(sendResponse);
+    });
+
+    if (!ok || !message.submit) {
+      sendResponse({ ok: Boolean(ok), submitted: false });
+      return;
+    }
+
+    submitPrompt(ok).then((submitted) => {
+      if (!submitted && message.showAlerts !== false) {
+        alert("Council Bridge inserted the prompt, but could not find an enabled send button.");
+      }
+
+      sendResponse({ ok: true, submitted });
+    });
     return true;
   }
 });
-
-async function insertTextAndSubmitPrompt(text, options) {
-  const promptBox = insertTextIntoPrompt(text, options);
-
-  if (!promptBox) {
-    return { ok: false, submitted: false };
-  }
-
-  const submitted = await submitPrompt(promptBox);
-
-  if (!submitted && options?.showAlerts) {
-    alert("Council Bridge inserted the prompt, but could not find an enabled send button.");
-  }
-
-  return { ok: true, submitted };
-}
 
 function insertTextIntoPrompt(text, options) {
   const promptBox = findVisiblePromptBox();
@@ -70,6 +72,50 @@ function findVisiblePromptBox() {
   }
 
   return null;
+}
+
+function getLatestVisibleReply() {
+  const selectors = [
+    '[data-message-author-role="assistant"]',
+    'article [data-message-author-role="assistant"]',
+    "message-content",
+    ".model-response-text",
+    ".response-content",
+    ".markdown"
+  ];
+
+  const candidates = Array.from(new Set(
+    selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+  ));
+  const replies = candidates
+    .filter(isVisibleReplyCandidate)
+    .map((element) => ({
+      text: normalizeReplyText(element.innerText || element.textContent || ""),
+      element
+    }))
+    .filter((reply) => reply.text.length > 0);
+  replies.sort((first, second) => {
+    if (first.element === second.element) {
+      return 0;
+    }
+
+    return first.element.compareDocumentPosition(second.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+
+  return replies.at(-1)?.text || "";
+}
+
+function isVisibleReplyCandidate(element) {
+  if (!isVisiblePromptCandidate(element) || findVisiblePromptBox()?.contains(element)) {
+    return false;
+  }
+
+  const text = normalizeReplyText(element.innerText || element.textContent || "");
+  return text.length >= 20;
+}
+
+function normalizeReplyText(text) {
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function isVisiblePromptCandidate(element) {
@@ -188,8 +234,7 @@ function findSendButton(promptBox) {
       return false;
     }
 
-    const label = getButtonLabel(button);
-    return /\bsend\b/i.test(label);
+    return /\bsend\b/i.test(getButtonLabel(button));
   }) || null;
 }
 
@@ -209,8 +254,7 @@ function findNearbySendButton(promptBox) {
         return false;
       }
 
-      const label = getButtonLabel(candidate);
-      return /\bsend\b/i.test(label) || candidate.type === "submit";
+      return /\bsend\b/i.test(getButtonLabel(candidate)) || candidate.type === "submit";
     });
 
     if (button) {

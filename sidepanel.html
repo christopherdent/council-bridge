@@ -9,12 +9,15 @@
         color-scheme: light;
         --bg: #f7f7f5;
         --panel: #ffffff;
-        --text: #1f2933;
-        --muted: #637083;
-        --border: #d8dee6;
+        --text: #202832;
+        --muted: #667383;
+        --border: #d9e0e7;
+        --chatgpt: #235c48;
+        --gemini: #255f85;
+        --christopher: #5b4b7a;
         --primary: #255f85;
         --primary-hover: #1e4f70;
-        --secondary: #eef4f7;
+        --secondary: #edf3f6;
         --secondary-hover: #dfeaf0;
       }
 
@@ -23,9 +26,9 @@
       }
 
       body {
-        min-width: 280px;
+        min-width: 300px;
+        height: 100vh;
         margin: 0;
-        padding: 16px;
         background: var(--bg);
         color: var(--text);
         font-family: Arial, Helvetica, sans-serif;
@@ -34,7 +37,22 @@
 
       main {
         display: grid;
+        grid-template-rows: auto minmax(160px, 1fr) auto;
         gap: 12px;
+        height: 100vh;
+        padding: 14px;
+      }
+
+      header {
+        display: grid;
+        gap: 8px;
+      }
+
+      .topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
       }
 
       h1 {
@@ -44,13 +62,7 @@
         letter-spacing: 0;
       }
 
-      .actions {
-        display: grid;
-        gap: 8px;
-      }
-
       button {
-        width: 100%;
         border: 1px solid var(--border);
         border-radius: 6px;
         padding: 9px 10px;
@@ -66,6 +78,7 @@
       }
 
       button.primary {
+        width: 100%;
         border-color: var(--primary);
         color: #ffffff;
         background: var(--primary);
@@ -75,9 +88,101 @@
         background: var(--primary-hover);
       }
 
+      .quick-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      button.link {
+        border: 0;
+        padding: 4px 0;
+        color: var(--muted);
+        background: transparent;
+        font-size: 12px;
+      }
+
+      button.link:hover {
+        color: var(--text);
+        background: transparent;
+      }
+
+      .status {
+        min-height: 17px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .turns {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        min-height: 0;
+        overflow-y: auto;
+        padding-right: 2px;
+      }
+
+      .empty {
+        margin: auto;
+        max-width: 260px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.4;
+        text-align: center;
+      }
+
+      .turn {
+        display: grid;
+        gap: 6px;
+        border: 1px solid var(--border);
+        border-left-width: 4px;
+        border-radius: 7px;
+        padding: 10px;
+        background: var(--panel);
+      }
+
+      .turn.chatgpt {
+        border-left-color: var(--chatgpt);
+      }
+
+      .turn.gemini {
+        border-left-color: var(--gemini);
+      }
+
+      .turn.christopher {
+        border-left-color: var(--christopher);
+      }
+
+      .turn-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .speaker {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .turn-text {
+        margin: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        line-height: 1.4;
+      }
+
+      .composer {
+        display: grid;
+        gap: 8px;
+      }
+
       textarea {
         width: 100%;
-        min-height: 240px;
+        min-height: 112px;
         resize: vertical;
         border: 1px solid var(--border);
         border-radius: 6px;
@@ -87,32 +192,39 @@
         font: 13px/1.4 Arial, Helvetica, sans-serif;
       }
 
-      .help,
-      .status {
-        margin: 0;
-        color: var(--muted);
-        font-size: 12px;
-        line-height: 1.4;
-      }
-
-      .status {
-        min-height: 17px;
+      .send-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>Council Bridge</h1>
-      <div class="actions">
-        <button id="captureSelectedText" class="primary" type="button">Capture selected text</button>
-        <button id="passSelection" type="button">Pass selection to other AI</button>
-        <button id="sendToGemini" type="button">Send to Gemini</button>
-        <button id="sendToChatGPT" type="button">Send to ChatGPT</button>
-      </div>
-      <textarea id="capturedText" aria-label="Captured text" placeholder="Captured text appears here. You can edit it before sending."></textarea>
-      <p class="help">Keep this panel open while you work in ChatGPT or Gemini. Highlight text and pass it to the other AI without switching tabs when background send succeeds.</p>
-      <p id="status" class="status" role="status" aria-live="polite"></p>
+      <header>
+        <div class="topline">
+          <h1>Council Bridge</h1>
+          <button id="clearConversation" class="link" type="button">Clear</button>
+        </div>
+        <button id="passSelection" class="primary" type="button">Pass selected reply to other AI</button>
+        <div class="quick-actions">
+          <button id="addSelection" type="button">Add selection</button>
+          <button id="refreshReplies" type="button">Refresh replies</button>
+        </div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </header>
+
+      <section id="turns" class="turns" aria-label="Conversation"></section>
+
+      <section class="composer" aria-label="Composer">
+        <textarea id="composerText" placeholder="Write as Christopher..."></textarea>
+        <div class="send-row">
+          <button id="sendComposerToGemini" type="button">Send to Gemini</button>
+          <button id="sendComposerToBoth" type="button">Insert for both</button>
+          <button id="sendComposerToChatGPT" type="button">Send to ChatGPT</button>
+        </div>
+      </section>
     </main>
-    <script src="popup.js"></script>
+    <script src="sidepanel.js"></script>
   </body>
 </html>

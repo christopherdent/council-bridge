@@ -15,7 +15,10 @@
     "https://gemini.google.com/*"
   ],
   "action": {
-    "default_popup": "popup.html"
+    "default_title": "Council Bridge"
+  },
+  "background": {
+    "service_worker": "background.js"
   },
   "side_panel": {
     "default_path": "sidepanel.html"

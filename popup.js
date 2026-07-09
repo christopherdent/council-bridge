@@ -5,25 +5,67 @@ const TARGETS = {
     urlPattern: "https://gemini.google.com/*",
     openUrl: "https://gemini.google.com/",
     label: "Gemini",
-    responseLabel: "Gemini",
-    defaultSourceLabel: "ChatGPT",
-    wrap: (capturedText, sourceLabel = "ChatGPT") => `${sourceLabel}:
+    defaultSourceLabel: "ChatGPT / Lobo",
+    wrap: (capturedText, sourceLabel = "ChatGPT / Lobo") => {
+      if (sourceLabel === "Christopher") {
+        return `[Council Bridge]
+Source: Christopher
+Target: Gemini
 
+Christopher said:
+
+--- BEGIN CHRISTOPHER MESSAGE ---
 ${capturedText}
+--- END CHRISTOPHER MESSAGE ---
 
-Gemini:`
+Gemini, please respond to Christopher with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`;
+      }
+
+      return `[Council Bridge]
+Source: ChatGPT / Lobo
+Target: Gemini
+
+Lobo said:
+
+--- BEGIN LOBO MESSAGE ---
+${capturedText}
+--- END LOBO MESSAGE ---
+
+Gemini, please respond to Christopher and Lobo with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`;
+    }
   },
   chatgpt: {
     urlPattern: "https://chatgpt.com/*",
     openUrl: "https://chatgpt.com/",
     label: "ChatGPT",
-    responseLabel: "ChatGPT",
     defaultSourceLabel: "Gemini",
-    wrap: (capturedText, sourceLabel = "Gemini") => `${sourceLabel}:
+    wrap: (capturedText, sourceLabel = "Gemini") => {
+      if (sourceLabel === "Christopher") {
+        return `[Council Bridge]
+Source: Christopher
+Target: ChatGPT / Lobo
 
+Christopher said:
+
+--- BEGIN CHRISTOPHER MESSAGE ---
 ${capturedText}
+--- END CHRISTOPHER MESSAGE ---
 
-ChatGPT:`
+Lobo, please respond to Christopher. Agree, disagree, refine the plan, and turn it into concrete next steps.`;
+      }
+
+      return `[Council Bridge]
+Source: Gemini
+Target: ChatGPT / Lobo
+
+Gemini said:
+
+--- BEGIN GEMINI MESSAGE ---
+${capturedText}
+--- END GEMINI MESSAGE ---
+
+Lobo, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.`;
+    }
   }
 };
 
@@ -119,23 +161,18 @@ async function sendToTarget(target, options) {
     await waitForTabReady(tab.id);
 
     const wrappedPrompt = target.wrap(capturedText, options?.sourceLabel || target.defaultSourceLabel);
-    let response = await insertAndSubmitInTab(tab.id, wrappedPrompt, { showAlerts: false });
+    let response = await insertPromptInTab(tab.id, wrappedPrompt, { showAlerts: false });
 
-    if (response?.ok && response?.submitted) {
-      setStatus(`Sent prompt to ${target.label} in the background.`);
+    if (response?.ok) {
+      setStatus(`Inserted prompt into ${target.label}. Review and manually send.`);
       return;
     }
 
     await focusTab(tab);
-    response = await insertAndSubmitInTab(tab.id, wrappedPrompt, { showAlerts: true });
-
-    if (response?.ok && response?.submitted) {
-      setStatus(`Sent prompt to ${target.label}.`);
-      return;
-    }
+    response = await insertPromptInTab(tab.id, wrappedPrompt, { showAlerts: true });
 
     if (response?.ok) {
-      setStatus(`Inserted prompt into ${target.label}, but could not auto-send.`);
+      setStatus(`Inserted prompt into ${target.label}. Review and manually send.`);
       return;
     }
 
@@ -169,7 +206,7 @@ function getOppositeTarget(url) {
 
 function getSourceLabel(url) {
   if (url.startsWith("https://chatgpt.com/")) {
-    return "ChatGPT";
+    return "ChatGPT / Lobo";
   }
 
   if (url.startsWith("https://gemini.google.com/")) {
@@ -232,7 +269,7 @@ async function sendMessageWithFallback(tabId, message) {
   }
 }
 
-function insertAndSubmitInTab(tabId, text, options) {
+function insertPromptInTab(tabId, text, options) {
   return sendMessageWithFallback(tabId, {
     type: "INSERT_TEXT",
     text,
