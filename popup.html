@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Council Bridge</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f7f5;
+        --panel: #ffffff;
+        --text: #1f2933;
+        --muted: #637083;
+        --border: #d8dee6;
+        --primary: #255f85;
+        --primary-hover: #1e4f70;
+        --secondary: #eef4f7;
+        --secondary-hover: #dfeaf0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 360px;
+        margin: 0;
+        padding: 16px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Arial, Helvetica, sans-serif;
+        font-size: 14px;
+      }
+
+      main {
+        display: grid;
+        gap: 12px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .actions {
+        display: grid;
+        gap: 8px;
+      }
+
+      button {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 9px 10px;
+        color: var(--text);
+        background: var(--secondary);
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: var(--secondary-hover);
+      }
+
+      button.primary {
+        border-color: var(--primary);
+        color: #ffffff;
+        background: var(--primary);
+      }
+
+      button.primary:hover {
+        background: var(--primary-hover);
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 180px;
+        resize: vertical;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 10px;
+        color: var(--text);
+        background: var(--panel);
+        font: 13px/1.4 Arial, Helvetica, sans-serif;
+      }
+
+      .help,
+      .status {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .status {
+        min-height: 17px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Council Bridge</h1>
+      <div class="actions">
+        <button id="captureSelectedText" class="primary" type="button">Capture selected text</button>
+        <button id="passSelection" type="button">Pass selection to other AI</button>
+        <button id="sendToGemini" type="button">Send to Gemini</button>
+        <button id="sendToChatGPT" type="button">Send to ChatGPT</button>
+        <button id="openSidePanel" type="button">Open side panel</button>
+      </div>
+      <textarea id="capturedText" aria-label="Captured text" placeholder="Captured text appears here. You can edit it before sending."></textarea>
+      <p class="help">Highlight text in ChatGPT or Gemini, then pass it to the other AI. Existing destination tabs stay in the background when possible.</p>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
