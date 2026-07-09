@@ -2,7 +2,7 @@
 
 Council Bridge is a tiny Chrome and Edge extension for manually moving highlighted text between ChatGPT and Gemini browser tabs. It captures selected text, tracks the snippets you explicitly add, wraps unseen turns in a direction-specific prompt, inserts them into the target service, and clicks send from the side panel.
 
-The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows snippets you explicitly pass, selected replies you add, latest replies you refresh, and text you write as Christopher.
+The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows snippets you explicitly pass, selected replies you add, latest replies you refresh, automatically captured completed AI replies, and text you write as Christopher. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
 
 It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 
@@ -24,6 +24,8 @@ It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 Use Add selection to add highlighted ChatGPT or Gemini text to the side panel without passing it to the other AI.
 
 Use Refresh replies to pull the latest visible ChatGPT and Gemini replies into the side panel conversation view.
+
+Completed ChatGPT and Gemini replies are also added automatically after their visible response text stops changing.
 
 Typed messages in the side panel use Send to Gemini, Send to ChatGPT, or Insert for both. Council Bridge sends every transcript turn that target has not seen since it was last advised.
 
@@ -50,6 +52,7 @@ Lobo, please respond to Christopher and Gemini. Agree, disagree, refine the plan
 - Side panel send/pass actions try to click send
 - Auto-submit depends on finding an enabled send button
 - Refresh replies uses best-effort selectors for the latest visible ChatGPT and Gemini response
+- Automatic reply capture waits for best-effort response stability and stop-button detection
 - Background send may fall back to focusing the destination tab if the inactive page does not accept insertion or submit events
 - Prompt box selectors may need updates if ChatGPT or Gemini changes their UI
 

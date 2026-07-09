@@ -70,10 +70,12 @@ clearConversationButton.addEventListener("click", clearConversation);
 composerTextEl.addEventListener("input", saveDraft);
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local" || !changes[STORAGE_KEYS.turns]) {
-    if (!changes[STORAGE_KEYS.deliveryState]) {
-      return;
-    }
+  if (areaName !== "local") {
+    return;
+  }
+
+  if (!changes[STORAGE_KEYS.turns] && !changes[STORAGE_KEYS.deliveryState]) {
+    return;
   }
 
   if (changes[STORAGE_KEYS.turns]) {
@@ -321,11 +323,12 @@ async function appendTurn(turn, options = {}) {
     return false;
   }
 
+  const createdAt = Date.now();
   const nextTurns = [
     ...turns,
     {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      createdAt: Date.now(),
+      id: `${createdAt}-${Math.random().toString(16).slice(2)}`,
+      createdAt,
       speaker: turn.speaker,
       text: turn.text,
       target: turn.target
@@ -383,11 +386,16 @@ function formatTurnsForPrompt(turnsToSend) {
 function formatTurnForPrompt(turn) {
   const speaker = getPromptSpeaker(turn.speaker);
 
-  return `${speaker.saidLine}:
+  return `Timestamp: ${formatTimestampForPrompt(turn.createdAt)}
+${speaker.saidLine}:
 
 --- BEGIN ${speaker.blockLabel} MESSAGE ---
 ${turn.text}
 --- END ${speaker.blockLabel} MESSAGE ---`;
+}
+
+function formatTimestampForPrompt(value) {
+  return new Date(normalizeTimestamp(value)).toISOString();
 }
 
 function getPromptSpeaker(speaker) {
@@ -451,16 +459,51 @@ function renderTurns() {
     const targetEl = document.createElement("span");
     targetEl.textContent = turn.target ? `to ${turn.target}` : "";
 
+    const timeEl = document.createElement("time");
+    timeEl.className = "timestamp";
+    timeEl.dateTime = formatTimestampForPrompt(turn.createdAt);
+    timeEl.title = timeEl.dateTime;
+    timeEl.textContent = formatTimestampForDisplay(turn.createdAt);
+
+    const detailsEl = document.createElement("span");
+    detailsEl.className = "turn-details";
+    if (turn.target) {
+      detailsEl.append(targetEl);
+    }
+    detailsEl.append(timeEl);
+
     const textEl = document.createElement("p");
     textEl.className = "turn-text";
     textEl.textContent = turn.text;
 
-    metaEl.append(speakerEl, targetEl);
+    metaEl.append(speakerEl, detailsEl);
     turnEl.append(metaEl, textEl);
     turnsEl.append(turnEl);
   }
 
   turnsEl.scrollTop = turnsEl.scrollHeight;
+}
+
+function formatTimestampForDisplay(value) {
+  const date = new Date(normalizeTimestamp(value));
+  const year = date.getFullYear();
+  const month = padDatePart(date.getMonth() + 1, 2);
+  const day = padDatePart(date.getDate(), 2);
+  const hours = padDatePart(date.getHours(), 2);
+  const minutes = padDatePart(date.getMinutes(), 2);
+  const seconds = padDatePart(date.getSeconds(), 2);
+  const milliseconds = padDatePart(date.getMilliseconds(), 3);
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
+function normalizeTimestamp(value) {
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+}
+
+function padDatePart(value, length) {
+  return String(value).padStart(length, "0");
 }
 
 async function clearConversation() {

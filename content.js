@@ -1,34 +1,48 @@
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type === "GET_SELECTION") {
-    sendResponse({ text: window.getSelection()?.toString() || "" });
-    return;
-  }
+var AUTO_REPLY_STABLE_MS = 2000;
+var AUTO_REPLY_MIN_LENGTH = 20;
 
-  if (message?.type === "GET_LATEST_REPLY") {
-    sendResponse({ text: getLatestVisibleReply() });
-    return;
-  }
+var autoReplyTimer = null;
+var lastObservedReplySignature = "";
+var lastSentReplySignature = "";
+var lastObservedReplyAt = 0;
 
-  if (message?.type === "INSERT_TEXT") {
-    const ok = insertTextIntoPrompt(message.text || "", {
-      showAlerts: message.showAlerts !== false
-    });
+if (!window.__councilBridgeContentLoaded) {
+  window.__councilBridgeContentLoaded = true;
 
-    if (!ok || !message.submit) {
-      sendResponse({ ok: Boolean(ok), submitted: false });
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "GET_SELECTION") {
+      sendResponse({ text: window.getSelection()?.toString() || "" });
       return;
     }
 
-    submitPrompt(ok).then((submitted) => {
-      if (!submitted && message.showAlerts !== false) {
-        alert("Council Bridge inserted the prompt, but could not find an enabled send button.");
+    if (message?.type === "GET_LATEST_REPLY") {
+      sendResponse({ text: getLatestVisibleReply() });
+      return;
+    }
+
+    if (message?.type === "INSERT_TEXT") {
+      const ok = insertTextIntoPrompt(message.text || "", {
+        showAlerts: message.showAlerts !== false
+      });
+
+      if (!ok || !message.submit) {
+        sendResponse({ ok: Boolean(ok), submitted: false });
+        return;
       }
 
-      sendResponse({ ok: true, submitted });
-    });
-    return true;
-  }
-});
+      submitPrompt(ok).then((submitted) => {
+        if (!submitted && message.showAlerts !== false) {
+          alert("Council Bridge inserted the prompt, but could not find an enabled send button.");
+        }
+
+        sendResponse({ ok: true, submitted });
+      });
+      return true;
+    }
+  });
+
+  startAutomaticReplyCapture();
+}
 
 function insertTextIntoPrompt(text, options) {
   const promptBox = findVisiblePromptBox();
@@ -103,6 +117,97 @@ function getLatestVisibleReply() {
   });
 
   return replies.at(-1)?.text || "";
+}
+
+function startAutomaticReplyCapture() {
+  const source = getReplySourceLabel();
+
+  if (!source || !document.documentElement) {
+    return;
+  }
+
+  lastSentReplySignature = getReplySignature(getLatestVisibleReply());
+  lastObservedReplySignature = lastSentReplySignature;
+  lastObservedReplyAt = Date.now();
+
+  const observer = new MutationObserver(scheduleAutomaticReplyCapture);
+  observer.observe(document.documentElement, {
+    childList: true,
+    characterData: true,
+    subtree: true
+  });
+
+  window.addEventListener("visibilitychange", scheduleAutomaticReplyCapture);
+  scheduleAutomaticReplyCapture();
+}
+
+function scheduleAutomaticReplyCapture() {
+  const text = normalizeReplyText(getLatestVisibleReply());
+  const signature = getReplySignature(text);
+
+  if (text.length < AUTO_REPLY_MIN_LENGTH || signature === lastSentReplySignature) {
+    return;
+  }
+
+  if (signature !== lastObservedReplySignature) {
+    lastObservedReplySignature = signature;
+    lastObservedReplyAt = Date.now();
+  }
+
+  window.clearTimeout(autoReplyTimer);
+  autoReplyTimer = window.setTimeout(captureStableAutomaticReply, AUTO_REPLY_STABLE_MS);
+}
+
+function captureStableAutomaticReply() {
+  const text = normalizeReplyText(getLatestVisibleReply());
+  const signature = getReplySignature(text);
+
+  if (
+    text.length < AUTO_REPLY_MIN_LENGTH ||
+    signature === lastSentReplySignature ||
+    signature !== lastObservedReplySignature ||
+    Date.now() - lastObservedReplyAt < AUTO_REPLY_STABLE_MS ||
+    isReplyStillStreaming()
+  ) {
+    scheduleAutomaticReplyCapture();
+    return;
+  }
+
+  lastSentReplySignature = signature;
+  sendAutomaticReply(text);
+}
+
+function sendAutomaticReply(text) {
+  chrome.runtime.sendMessage({
+    type: "AI_REPLY_READY",
+    speaker: getReplySourceLabel(),
+    text,
+    completedAt: Date.now()
+  }, () => {
+    chrome.runtime.lastError;
+  });
+}
+
+function isReplyStillStreaming() {
+  return Array.from(document.querySelectorAll("button")).some((button) => {
+    return isVisiblePromptCandidate(button) && /\bstop\b/i.test(getButtonLabel(button));
+  });
+}
+
+function getReplySourceLabel() {
+  if (location.hostname === "chatgpt.com") {
+    return "ChatGPT";
+  }
+
+  if (location.hostname === "gemini.google.com") {
+    return "Gemini";
+  }
+
+  return "";
+}
+
+function getReplySignature(text) {
+  return normalizeReplyText(text).replace(/\s+/g, " ").trim();
 }
 
 function isVisibleReplyCandidate(element) {

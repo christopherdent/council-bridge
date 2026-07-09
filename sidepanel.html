@@ -157,6 +157,7 @@
 
       .turn-meta {
         display: flex;
+        flex-wrap: wrap;
         justify-content: space-between;
         gap: 8px;
         color: var(--muted);
@@ -166,6 +167,18 @@
       .speaker {
         color: var(--text);
         font-weight: 700;
+      }
+
+      .turn-details {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 4px 8px;
+        text-align: right;
+      }
+
+      .timestamp {
+        font-variant-numeric: tabular-nums;
       }
 
       .turn-text {
