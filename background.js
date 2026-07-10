@@ -6,6 +6,7 @@ const STORAGE_KEYS = {
 const MAX_TURNS = 80;
 const PENDING_CONVERSATION_PREFIX = "pending";
 const REPLY_SUPERSEDE_WINDOW_MS = 10 * 60 * 1000;
+const REPLY_NEAR_DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const TARGETS = {
   chatgpt: {
     label: "ChatGPT",
@@ -274,6 +275,31 @@ async function commitReply({ turns, session, speaker, text, completedAt }) {
   }
 
   const createdAt = normalizeTimestamp(completedAt);
+  const nearDuplicateIndex = findNearDuplicateReplyIndex(turns, speaker, text, createdAt);
+
+  if (nearDuplicateIndex >= 0) {
+    if (shouldReplaceDuplicateReply(turns[nearDuplicateIndex].text || "", text)) {
+      const nextTurns = turns.map((turn, index) => {
+        if (index !== nearDuplicateIndex) {
+          return turn;
+        }
+
+        return {
+          ...turn,
+          text,
+          target: ""
+        };
+      });
+
+      await chrome.storage.local.set({ [STORAGE_KEYS.turns]: nextTurns });
+      console.info(`[CouncilBridge][SKIPPED_DUPLICATE] speaker=${speaker} reason=near-duplicate-updated-formatting`);
+      return { ok: true, added: false, updated: true, reason: "near-duplicate-updated-formatting" };
+    }
+
+    console.info(`[CouncilBridge][SKIPPED_DUPLICATE] speaker=${speaker} reason=near-duplicate`);
+    return { ok: true, added: false, reason: "near-duplicate" };
+  }
+
   const supersededIndex = findSupersededReplyIndex(turns, speaker, text, createdAt);
 
   if (supersededIndex >= 0) {
@@ -525,6 +551,28 @@ function isDuplicateTurn(turns, speaker, text) {
   });
 }
 
+function findNearDuplicateReplyIndex(turns, speaker, text, completedAt) {
+  const incomingSignature = normalizeForLooseDuplicate(text);
+
+  if (incomingSignature.length < 40) {
+    return -1;
+  }
+
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+
+    if (!isRecentSpeakerReply(turn, speaker, completedAt, REPLY_NEAR_DUPLICATE_WINDOW_MS)) {
+      continue;
+    }
+
+    if (normalizeForLooseDuplicate(turn.text || "") === incomingSignature) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
 function findSupersededReplyIndex(turns, speaker, text, completedAt) {
   const incomingText = normalizeForDuplicate(text);
 
@@ -535,7 +583,7 @@ function findSupersededReplyIndex(turns, speaker, text, completedAt) {
   for (let index = turns.length - 1; index >= 0; index -= 1) {
     const turn = turns[index];
 
-    if (!isRecentSpeakerReply(turn, speaker, completedAt)) {
+    if (!isRecentSpeakerReply(turn, speaker, completedAt, REPLY_SUPERSEDE_WINDOW_MS)) {
       continue;
     }
 
@@ -553,7 +601,7 @@ function isShorterVersionOfExistingReply(turns, speaker, text, completedAt) {
   const incomingText = normalizeForDuplicate(text);
 
   return turns.some((turn) => {
-    if (!isRecentSpeakerReply(turn, speaker, completedAt)) {
+    if (!isRecentSpeakerReply(turn, speaker, completedAt, REPLY_SUPERSEDE_WINDOW_MS)) {
       return false;
     }
 
@@ -561,11 +609,11 @@ function isShorterVersionOfExistingReply(turns, speaker, text, completedAt) {
   });
 }
 
-function isRecentSpeakerReply(turn, speaker, completedAt) {
+function isRecentSpeakerReply(turn, speaker, completedAt, windowMs) {
   return (
     turn.speaker === speaker &&
     !turn.target &&
-    Math.abs(normalizeTimestamp(completedAt) - normalizeTimestamp(turn.createdAt)) <= REPLY_SUPERSEDE_WINDOW_MS
+    Math.abs(normalizeTimestamp(completedAt) - normalizeTimestamp(turn.createdAt)) <= windowMs
   );
 }
 
@@ -577,12 +625,31 @@ function isLongerContinuation(longerText, shorterText) {
   );
 }
 
+function shouldReplaceDuplicateReply(existingText, incomingText) {
+  return getReplyFormattingScore(incomingText) > getReplyFormattingScore(existingText) + 4;
+}
+
+function getReplyFormattingScore(text) {
+  const value = String(text || "");
+  const paragraphBreaks = (value.match(/\n\s*\n/g) || []).length;
+  const lineBreaks = (value.match(/\n/g) || []).length;
+  const gluedSentences = (value.match(/[.!?][A-Z]/g) || []).length;
+
+  return paragraphBreaks * 8 + lineBreaks * 2 - gluedSentences * 6;
+}
+
 function normalizeReplyText(text) {
   return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function normalizeForDuplicate(text) {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function normalizeForLooseDuplicate(text) {
+  return normalizeForDuplicate(text)
+    .toLowerCase()
+    .replace(/\s+/g, "");
 }
 
 function normalizeNickname(value) {
