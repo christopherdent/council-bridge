@@ -13,6 +13,8 @@ const STREAM_CONFIRMED_STABLE_MS = 1200;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
+const TYPEWRITER_INTERVAL_MS = 18;
+const TYPEWRITER_MAX_DURATION_MS = 850;
 const PENDING_CONVERSATION_PREFIX = "pending";
 
 const TARGETS = {
@@ -96,6 +98,8 @@ const replyWatchers = new Map();
 let deliveryWriteQueue = Promise.resolve();
 
 let renderedTurnIds = new Set();
+const animatedTurnTextById = new Map();
+const typewriterTimers = new Map();
 
 document.addEventListener("DOMContentLoaded", loadPanelState);
 passSelectionButton.addEventListener("click", passSelectionToOtherAi);
@@ -130,6 +134,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     const previousTurns = changes[STORAGE_KEYS.turns].oldValue || [];
     turns = changes[STORAGE_KEYS.turns].newValue || [];
     addedTurns = getAddedTurns(previousTurns, turns);
+    prepareTypewriterForAddedTurns(addedTurns);
   }
 
   if (changes[STORAGE_KEYS.deliveryState]) {
@@ -493,6 +498,7 @@ function startReplyWatcher(target, baselineText) {
   };
 
   replyWatchers.set(target.label, watcher);
+  renderTurns();
 
   async function tick() {
     if (replyWatchers.get(target.label) !== watcher) {
@@ -586,6 +592,7 @@ function stopReplyWatcher(label) {
   }
 
   replyWatchers.delete(label);
+  renderTurns();
 }
 
 function getUnseenTurnsForTarget(target) {
@@ -719,6 +726,53 @@ function getReplySignature(text) {
   return normalizeText(text);
 }
 
+function prepareTypewriterForAddedTurns(addedTurns) {
+  for (const turn of addedTurns) {
+    if (!isAgentSpeaker(turn.speaker) || !turn.text) {
+      continue;
+    }
+
+    startTypewriterForTurn(turn);
+  }
+}
+
+function startTypewriterForTurn(turn) {
+  window.clearTimeout(typewriterTimers.get(turn.id));
+  typewriterTimers.delete(turn.id);
+  animatedTurnTextById.set(turn.id, "");
+  revealTypewriterChunk(turn, 0);
+}
+
+function revealTypewriterChunk(turn, visibleLength) {
+  const text = String(turn.text || "");
+  const maxSteps = Math.max(1, Math.floor(TYPEWRITER_MAX_DURATION_MS / TYPEWRITER_INTERVAL_MS));
+  const chunkSize = Math.max(8, Math.ceil(text.length / maxSteps));
+  const nextVisibleLength = Math.min(text.length, visibleLength + chunkSize);
+
+  animatedTurnTextById.set(turn.id, text.slice(0, nextVisibleLength));
+  renderTurns();
+
+  if (nextVisibleLength >= text.length) {
+    animatedTurnTextById.delete(turn.id);
+    typewriterTimers.delete(turn.id);
+    return;
+  }
+
+  const timerId = window.setTimeout(() => {
+    revealTypewriterChunk(turn, nextVisibleLength);
+  }, TYPEWRITER_INTERVAL_MS);
+  typewriterTimers.set(turn.id, timerId);
+}
+
+function clearTypewriterTimers() {
+  for (const timerId of typewriterTimers.values()) {
+    window.clearTimeout(timerId);
+  }
+
+  typewriterTimers.clear();
+  animatedTurnTextById.clear();
+}
+
 function reconcileRenderedTurns() {
   revealAllTurnsImmediately();
 }
@@ -733,7 +787,7 @@ function renderTurns() {
 
   const visibleTurns = turns.filter((turn) => renderedTurnIds.has(turn.id));
 
-  if (turns.length === 0) {
+  if (turns.length === 0 && replyWatchers.size === 0) {
     const emptyEl = document.createElement("p");
     emptyEl.className = "empty";
     emptyEl.textContent = "No turns yet. Highlight a response or write as Christopher.";
@@ -770,14 +824,47 @@ function renderTurns() {
 
     const textEl = document.createElement("p");
     textEl.className = "turn-text";
-    textEl.textContent = turn.text;
+    textEl.textContent = animatedTurnTextById.has(turn.id) ? animatedTurnTextById.get(turn.id) : turn.text;
 
     metaEl.append(speakerEl, detailsEl);
     turnEl.append(metaEl, textEl);
     turnsEl.append(turnEl);
   }
 
+  renderTypingIndicators();
   turnsEl.scrollTop = turnsEl.scrollHeight;
+}
+
+function renderTypingIndicators() {
+  for (const label of replyWatchers.keys()) {
+    const turnEl = document.createElement("article");
+    turnEl.className = `turn typing ${label.toLowerCase()}`;
+
+    const metaEl = document.createElement("div");
+    metaEl.className = "turn-meta";
+
+    const speakerEl = document.createElement("span");
+    speakerEl.className = "speaker";
+    speakerEl.textContent = `${getTurnSpeakerDisplayName(label)}:`;
+
+    const stateEl = document.createElement("span");
+    stateEl.className = "typing-state";
+    stateEl.textContent = "typing";
+
+    const textEl = document.createElement("p");
+    textEl.className = "turn-text typing-text";
+    textEl.textContent = "Working";
+
+    const dotsEl = document.createElement("span");
+    dotsEl.className = "typing-dots";
+    dotsEl.setAttribute("aria-hidden", "true");
+    dotsEl.textContent = "...";
+
+    textEl.append(dotsEl);
+    metaEl.append(speakerEl, stateEl);
+    turnEl.append(metaEl, textEl);
+    turnsEl.append(turnEl);
+  }
 }
 
 function getTurnSpeakerDisplayName(speaker) {
@@ -790,6 +877,10 @@ function getTurnSpeakerDisplayName(speaker) {
   }
 
   return speaker;
+}
+
+function isAgentSpeaker(speaker) {
+  return speaker === "ChatGPT" || speaker === "Gemini";
 }
 
 function getTargetKeyForSpeaker(speaker) {
@@ -1273,6 +1364,7 @@ async function clearConversation() {
 
   turns = [];
   deliveryState = normalizeDeliveryState();
+  clearTypewriterTimers();
   revealAllTurnsImmediately();
   await chrome.storage.local.set({
     [STORAGE_KEYS.turns]: [],

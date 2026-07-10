@@ -12,9 +12,15 @@
         --text: #202832;
         --muted: #667383;
         --border: #d9e0e7;
-        --chatgpt: #235c48;
-        --gemini: #255f85;
-        --christopher: #5b4b7a;
+        --chatgpt: #0f8f68;
+        --chatgpt-bg: #dffaf0;
+        --chatgpt-border: #5ad0a9;
+        --gemini: #2563eb;
+        --gemini-bg: #e2edff;
+        --gemini-border: #7aa7ff;
+        --christopher: #7c3aed;
+        --christopher-bg: #f0e7ff;
+        --christopher-border: #b899ff;
         --primary: #255f85;
         --primary-hover: #1e4f70;
         --secondary: #edf3f6;
@@ -224,15 +230,54 @@
       }
 
       .turn.chatgpt {
+        border-color: var(--chatgpt-border);
         border-left-color: var(--chatgpt);
+        background: var(--chatgpt-bg);
       }
 
       .turn.gemini {
+        border-color: var(--gemini-border);
         border-left-color: var(--gemini);
+        background: var(--gemini-bg);
       }
 
       .turn.christopher {
+        border-color: var(--christopher-border);
         border-left-color: var(--christopher);
+        background: var(--christopher-bg);
+      }
+
+      .turn.typing {
+        border-style: dashed;
+      }
+
+      .typing-state {
+        color: var(--muted);
+        font-size: 12px;
+        font-style: italic;
+      }
+
+      .typing-text {
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .typing-dots {
+        display: inline-block;
+        width: 18px;
+        overflow: hidden;
+        vertical-align: bottom;
+        animation: typing-dots 900ms steps(4, end) infinite;
+      }
+
+      @keyframes typing-dots {
+        0% {
+          width: 0;
+        }
+
+        100% {
+          width: 18px;
+        }
       }
 
       .turn-meta {
