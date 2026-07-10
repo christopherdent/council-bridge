@@ -194,6 +194,21 @@
         font: inherit;
       }
 
+      .mode-row {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .mode-row input {
+        width: 15px;
+        height: 15px;
+        margin: 0;
+      }
+
       .session-summary {
         margin: 0;
         color: var(--muted);
@@ -474,6 +489,10 @@
             <label class="nickname-row">
               <span>Gemini name</span>
               <input id="geminiNickname" type="text" placeholder="Gemini">
+            </label>
+            <label class="mode-row">
+              <input id="roundtableMode" type="checkbox">
+              <span>Roundtable mode</span>
             </label>
             <div class="session-actions">
               <button id="setActiveAsChatGPT" type="button" title="Assign the active tab as ChatGPT">Set ChatGPT</button>

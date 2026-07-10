@@ -399,10 +399,41 @@ function normalizeCouncilSession(value) {
       gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
     },
     botToBot: normalizeBotToBotState(value?.botToBot),
+    roundtable: normalizeRoundtableState(value?.roundtable),
     members: {
       chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
       gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
     }
+  };
+}
+
+function normalizeRoundtableState(value) {
+  const nextFirst = ["gemini", "chatgpt"].includes(value?.nextFirst) ? value.nextFirst : "gemini";
+
+  return {
+    enabled: Boolean(value?.enabled),
+    nextFirst,
+    pending: normalizeRoundtablePending(value?.pending)
+  };
+}
+
+function normalizeRoundtablePending(value) {
+  if (!value?.id || value.status !== "waiting_first_reply") {
+    return null;
+  }
+
+  if (!["gemini", "chatgpt"].includes(value.firstAgent) || !["gemini", "chatgpt"].includes(value.secondAgent) || value.firstAgent === value.secondAgent) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    sourceTurnId: value.sourceTurnId || "",
+    firstAgent: value.firstAgent,
+    secondAgent: value.secondAgent,
+    createdAt: Number(value.createdAt) || Date.now(),
+    firstSentAt: Number(value.firstSentAt) || 0,
+    status: "waiting_first_reply"
   };
 }
 

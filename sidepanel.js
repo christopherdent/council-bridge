@@ -85,6 +85,7 @@ const removeActiveFromCouncilButton = document.getElementById("removeActiveFromC
 const toggleCapturePauseButton = document.getElementById("toggleCapturePause");
 const chatgptNicknameEl = document.getElementById("chatgptNickname");
 const geminiNicknameEl = document.getElementById("geminiNickname");
+const roundtableModeEl = document.getElementById("roundtableMode");
 const handoffPanelEl = document.getElementById("handoffPanel");
 const handoffNoticeEl = document.getElementById("handoffNotice");
 const approveHandoffButton = document.getElementById("approveHandoff");
@@ -126,13 +127,14 @@ composerTextEl.addEventListener("input", saveDraft);
 composerTextEl.addEventListener("keydown", handleComposerKeydown);
 chatgptNicknameEl.addEventListener("change", () => saveNickname(TARGETS.chatgpt, chatgptNicknameEl.value));
 geminiNicknameEl.addEventListener("change", () => saveNickname(TARGETS.gemini, geminiNicknameEl.value));
+roundtableModeEl.addEventListener("change", toggleRoundtableMode);
 approveHandoffButton.addEventListener("click", () => approvePendingHandoff(0));
 rejectHandoffButton.addEventListener("click", rejectPendingHandoff);
 approveOneHandoffButton.addEventListener("click", () => approvePendingHandoff(1));
 approveThreeHandoffsButton.addEventListener("click", () => approvePendingHandoff(3));
 approveTenHandoffsButton.addEventListener("click", () => approvePendingHandoff(10));
 
-chrome.storage.onChanged.addListener((changes, areaName) => {
+chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (areaName !== "local") {
     return;
   }
@@ -167,6 +169,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   renderHandoffPanel();
 
   for (const turn of changedTurns) {
+    if (await continueRoundtableForTurn(turn)) {
+      continue;
+    }
+
     detectBotHandoffForTurn(turn);
   }
 });
@@ -298,6 +304,11 @@ async function sendComposer() {
     return;
   }
 
+  if (councilSession.roundtable.enabled) {
+    await sendComposerRoundtable(route.text);
+    return;
+  }
+
   await sendComposerToBoth(route.text);
 }
 
@@ -373,6 +384,81 @@ async function sendComposerToBoth(text) {
   }
 }
 
+async function sendComposerRoundtable(text) {
+  try {
+    await Promise.all([
+      captureLatestReplyFromTarget(TARGETS.chatgpt),
+      captureLatestReplyFromTarget(TARGETS.gemini)
+    ]);
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.capturedText]: text,
+      [STORAGE_KEYS.draft]: ""
+    });
+    composerTextEl.value = "";
+
+    await appendTurn({
+      speaker: "Christopher",
+      text,
+      target: `Roundtable: ${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`,
+      recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key]
+    }, {
+      allowDuplicate: true
+    });
+
+    const sourceTurn = turns.at(-1);
+    const firstKey = getRoundtableFirstAgentKey();
+    const secondKey = firstKey === TARGETS.gemini.key ? TARGETS.chatgpt.key : TARGETS.gemini.key;
+    const firstTarget = TARGETS[firstKey];
+
+    councilSession = {
+      ...councilSession,
+      roundtable: {
+        ...councilSession.roundtable,
+        pending: {
+          id: `roundtable_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+          sourceTurnId: sourceTurn?.id || "",
+          firstAgent: firstKey,
+          secondAgent: secondKey,
+          createdAt: Date.now(),
+          status: "waiting_first_reply"
+        }
+      }
+    };
+    await saveCouncilSession();
+
+    console.info(`[CouncilBridge][ROUNDTABLE_STARTED] id=${councilSession.roundtable.pending.id} first=${firstKey} second=${secondKey} sourceTurnId=${sourceTurn?.id || ""}`);
+
+    const sent = await sendToTarget(firstTarget, {
+      roundtable: {
+        position: "first"
+      }
+    });
+
+    if (!sent) {
+      await clearRoundtablePending("Roundtable could not send the first turn.");
+      return;
+    }
+
+    if (councilSession.roundtable.pending?.sourceTurnId === sourceTurn?.id) {
+      councilSession = {
+        ...councilSession,
+        roundtable: {
+          ...councilSession.roundtable,
+          pending: {
+            ...councilSession.roundtable.pending,
+            firstSentAt: Date.now()
+          }
+        }
+      };
+      await saveCouncilSession();
+    }
+
+    setStatus(`Roundtable started with ${getAgentName(firstTarget)}.`);
+  } catch (error) {
+    setStatus(`Roundtable failed: ${getErrorMessage(error)}`);
+  }
+}
+
 function parseComposerRoute(rawText) {
   const targets = new Set();
 
@@ -405,11 +491,11 @@ function normalizeTagAlias(value) {
   return CouncilBridgeRouting.normalizeTagAlias(value);
 }
 
-function sendToTarget(target) {
+function sendToTarget(target, options = {}) {
   const previousSend = targetSendQueues.get(target.key) || Promise.resolve();
   const queuedSend = previousSend
     .catch(() => {})
-    .then(() => performSendToTarget(target));
+    .then(() => performSendToTarget(target, options));
 
   targetSendQueues.set(target.key, queuedSend);
   scheduleHandoffReadinessCheck();
@@ -422,7 +508,7 @@ function sendToTarget(target) {
   });
 }
 
-async function performSendToTarget(target) {
+async function performSendToTarget(target, options = {}) {
   let turnsToSend = getUnseenTurnsForTarget(target);
   const tab = await getCouncilTabForTarget(target);
 
@@ -453,9 +539,18 @@ async function performSendToTarget(target) {
   }
 
   const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
-  const prompt = target.wrapTurns(turnsToSend, {
+  let prompt = target.wrapTurns(turnsToSend, {
     includeCouncilOverview: !hasTargetBeenAdvised(target)
   });
+
+  if (options.roundtable) {
+    prompt = `${prompt}\n\n${formatRoundtableInstruction(target, options.roundtable)}`;
+  }
+
+  if (!councilSession.paused) {
+    startReplyWatcher(target, latestReplyBeforeSend);
+  }
+
   let response = await insertPromptInTab(tab.id, prompt, {
     showAlerts: false,
     submit: true
@@ -463,9 +558,6 @@ async function performSendToTarget(target) {
 
   if (response?.ok && response?.submitted) {
     await markTargetAdvised(target, turnsToSend);
-    if (!councilSession.paused) {
-      startReplyWatcher(target, latestReplyBeforeSend);
-    }
     setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${getAgentName(target)}.`);
     return true;
   }
@@ -478,12 +570,11 @@ async function performSendToTarget(target) {
 
   if (response?.ok && response?.submitted) {
     await markTargetAdvised(target, turnsToSend);
-    if (!councilSession.paused) {
-      startReplyWatcher(target, latestReplyBeforeSend);
-    }
     setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${getAgentName(target)}.`);
     return true;
   }
+
+  stopReplyWatcher(target.label);
 
   if (response?.ok) {
     setStatus(`Inserted into ${getAgentName(target)}, but could not click send.`);
@@ -527,6 +618,7 @@ async function appendTurn(turn, options = {}) {
 
   if (turn.speaker === "Christopher") {
     await resetBotToBotTurnCount();
+    await resetRoundtablePendingForChristopher();
   }
 
   const createdAt = Date.now();
@@ -1143,10 +1235,50 @@ function normalizeCouncilSession(value) {
       gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
     },
     botToBot: normalizeBotToBotState(value?.botToBot),
+    roundtable: normalizeRoundtableState(value?.roundtable),
     members: {
       chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
       gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
     }
+  };
+}
+
+function normalizeRoundtableState(value) {
+  const nextFirst = [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(value?.nextFirst)
+    ? value.nextFirst
+    : TARGETS.gemini.key;
+
+  return {
+    enabled: Boolean(value?.enabled),
+    nextFirst,
+    pending: normalizeRoundtablePending(value?.pending)
+  };
+}
+
+function normalizeRoundtablePending(value) {
+  if (!value?.id || value.status !== "waiting_first_reply") {
+    return null;
+  }
+
+  const firstAgent = [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(value.firstAgent)
+    ? value.firstAgent
+    : "";
+  const secondAgent = [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(value.secondAgent)
+    ? value.secondAgent
+    : "";
+
+  if (!firstAgent || !secondAgent || firstAgent === secondAgent) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    sourceTurnId: value.sourceTurnId || "",
+    firstAgent,
+    secondAgent,
+    createdAt: Number(value.createdAt) || Date.now(),
+    firstSentAt: Number(value.firstSentAt) || 0,
+    status: "waiting_first_reply"
   };
 }
 
@@ -1284,6 +1416,20 @@ async function toggleCapturePause() {
   setStatus(councilSession.paused ? "Capture paused." : "Capture resumed.");
 }
 
+async function toggleRoundtableMode() {
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      enabled: roundtableModeEl.checked,
+      pending: roundtableModeEl.checked ? councilSession.roundtable.pending : null
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus(councilSession.roundtable.enabled ? "Roundtable mode enabled." : "Roundtable mode disabled.");
+}
+
 async function saveCouncilSession() {
   councilSession = normalizeCouncilSession(councilSession);
   await chrome.storage.local.set({ [STORAGE_KEYS.session]: councilSession });
@@ -1294,14 +1440,19 @@ async function saveCouncilSession() {
 function renderCouncilSession() {
   chatgptNicknameEl.value = getAgentName(TARGETS.chatgpt);
   geminiNicknameEl.value = getAgentName(TARGETS.gemini);
+  roundtableModeEl.checked = councilSession.roundtable.enabled;
 
   const chatgpt = formatCouncilMember(councilSession.members.chatgpt, "not set");
   const gemini = formatCouncilMember(councilSession.members.gemini, "not set");
   const state = councilSession.paused ? "paused" : "active";
+  const roundtable = councilSession.roundtable.enabled
+    ? `on; next first: ${getAgentName(TARGETS[councilSession.roundtable.nextFirst])}`
+    : "off";
 
   sessionSummaryEl.textContent = `Council capture: ${state}
 ChatGPT: ${chatgpt}
-Gemini: ${gemini}`;
+Gemini: ${gemini}
+Roundtable: ${roundtable}`;
   toggleCapturePauseButton.textContent = councilSession.paused ? "Resume capture" : "Pause capture";
 }
 
@@ -1401,6 +1552,115 @@ async function refreshHandoffReadiness() {
   handoffReadiness = { handoffId: pending.id, ready, reason };
   renderHandoffPanel();
   scheduleHandoffReadinessCheck(750);
+}
+
+async function continueRoundtableForTurn(turn) {
+  const pending = councilSession.roundtable.pending;
+
+  if (!councilSession.roundtable.enabled || !pending) {
+    return false;
+  }
+
+  const firstTarget = TARGETS[pending.firstAgent];
+  const secondTarget = TARGETS[pending.secondAgent];
+
+  if (!firstTarget || !secondTarget || turn.speaker !== firstTarget.label) {
+    return false;
+  }
+
+  const earliestReplyAt = pending.firstSentAt || pending.createdAt;
+
+  if (turn.createdAt < earliestReplyAt) {
+    return false;
+  }
+
+  console.info(`[CouncilBridge][ROUNDTABLE_FIRST_REPLY] id=${pending.id} first=${pending.firstAgent} second=${pending.secondAgent} turnId=${turn.id}`);
+  setStatus(`Roundtable: passing ${getAgentName(firstTarget)}'s reply to ${getAgentName(secondTarget)}.`);
+
+  const sent = await sendToTarget(secondTarget, {
+    roundtable: {
+      position: "second",
+      firstName: getAgentName(firstTarget)
+    }
+  });
+
+  if (!sent) {
+    await clearRoundtablePending("Roundtable could not send the second turn.");
+    return true;
+  }
+
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      nextFirst: pending.secondAgent,
+      pending: null
+    }
+  };
+  await saveCouncilSession();
+  console.info(`[CouncilBridge][ROUNDTABLE_COMPLETED] id=${pending.id} first=${pending.firstAgent} second=${pending.secondAgent}`);
+  setStatus(`Roundtable sent context to ${getAgentName(secondTarget)}.`);
+  return true;
+}
+
+function formatRoundtableInstruction(target, roundtable) {
+  const targetName = getAgentName(target);
+
+  if (roundtable.position === "second") {
+    const firstName = roundtable.firstName || "Reviewer 1";
+
+    return `[Council Bridge Roundtable]
+You are Reviewer 2 in this round. The included turns should contain Christopher's prompt and ${firstName}'s response.
+
+Evaluate ${firstName}'s response independently. Agree, refine, or challenge it with concrete reasons. Do not merely edit, summarize, or echo ${firstName}. Preserve your own judgment and keep the reply concise unless Christopher asked for depth.`;
+  }
+
+  return `[Council Bridge Roundtable]
+You are Reviewer 1 in this round. Give Christopher your independent answer first. Do not try to predict or force consensus with the other council member. Surface the most useful point, risk, or recommendation clearly and keep the reply concise unless Christopher asked for depth.
+
+You are participating in this round as ${targetName}.`;
+}
+
+function getRoundtableFirstAgentKey() {
+  return [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(councilSession.roundtable.nextFirst)
+    ? councilSession.roundtable.nextFirst
+    : TARGETS.gemini.key;
+}
+
+async function clearRoundtablePending(message) {
+  const pending = councilSession.roundtable.pending;
+
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      pending: null
+    }
+  };
+  await saveCouncilSession();
+  if (pending) {
+    console.info(`[CouncilBridge][ROUNDTABLE_CANCELLED] id=${pending.id} reason=${message || "cleared"}`);
+  }
+  setStatus(message);
+}
+
+async function resetRoundtablePendingForChristopher() {
+  const pending = councilSession.roundtable.pending;
+
+  if (!pending) {
+    return;
+  }
+
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      pending: null
+    }
+  };
+
+  await saveCouncilSession();
+  console.info(`[CouncilBridge][ROUNDTABLE_CANCELLED] id=${pending.id} reason=new_christopher_turn`);
 }
 
 function getAddedTurns(previousTurns, nextTurns) {
@@ -1673,12 +1933,20 @@ async function clearConversation() {
 
   turns = [];
   deliveryState = normalizeDeliveryState();
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      pending: null
+    }
+  };
   clearTypewriterTimers();
   clearRevealTimers();
   revealAllTurnsImmediately();
   await chrome.storage.local.set({
     [STORAGE_KEYS.turns]: [],
-    [STORAGE_KEYS.deliveryState]: deliveryState
+    [STORAGE_KEYS.deliveryState]: deliveryState,
+    [STORAGE_KEYS.session]: normalizeCouncilSession(councilSession)
   });
   setStatus("Conversation cleared.");
 }

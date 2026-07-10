@@ -83,6 +83,14 @@ The first send to an agent also includes a short Council Bridge overview and a l
 
 The disposition sets each agent up as an independent engineering peer rather than an agreement machine: it asks for productive friction, an anti-echo protocol (explore, critique, separate evidence from speculation, and openly concede when new evidence changes a conclusion), and keeps Christopher as the primary systems engineer and final decision-maker. The cognitive role differs by agent — Gemini is pointed at macro-scale architecture, cross-disciplinary synthesis, and scaling; ChatGPT is pointed at rigorous decomposition, deterministic validation, hidden assumptions, and edge cases. Role selection is keyed to the actual target (ChatGPT vs. Gemini), not its nickname. The disposition ships only with the first-send overview; later incremental sends do not repeat it.
 
+### Roundtable Mode
+
+Enable `Roundtable mode` in Council setup when you want a group message to run sequentially instead of in parallel.
+
+In Roundtable mode, a group send goes to one council member first. When that reply is captured, Council Bridge sends the still-unseen context to the other member, so the second response includes Christopher's message plus the first agent's answer. The starting member alternates each round.
+
+Single-member route tags still send directly to that member. Bot-to-bot Human Gavel handoffs still work for normal assistant replies outside the active Roundtable pass.
+
 ### Bot-to-Bot Handoffs
 
 Assistant replies can request a controlled handoff by including a route tag for the other council member anywhere in the reply.
