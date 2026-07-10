@@ -12,6 +12,7 @@ const REPLY_WATCH_STABLE_MS = 2000;
 const STREAM_CONFIRMED_STABLE_MS = 1200;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
+const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
 
 const TARGETS = {
   gemini: {
@@ -1497,6 +1498,10 @@ async function insertPromptInTab(tabId, text, options) {
     });
   } finally {
     if (wakeResponse?.activated) {
+      if (options?.submit === true) {
+        await delay(BACKGROUND_SUBMIT_ACTIVE_HOLD_MS);
+      }
+
       const restoreTargetId = wakeResponse.previousTabId ?? tabId;
       await restoreTabAfterInjection(restoreTargetId, wakeResponse.windowId, wakeResponse.lockId);
     }
