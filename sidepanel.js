@@ -100,6 +100,9 @@ let councilSession = normalizeCouncilSession();
 const replyWatchers = new Map();
 const targetSendQueues = new Map();
 let deliveryWriteQueue = Promise.resolve();
+let handoffReadiness = { handoffId: "", ready: false, reason: "" };
+let handoffReadinessTimer = null;
+let handoffReadinessCheckInFlight = false;
 
 let renderedTurnIds = new Set();
 const animatedTurnTextById = new Map();
@@ -416,10 +419,12 @@ function sendToTarget(target) {
     .then(() => performSendToTarget(target));
 
   targetSendQueues.set(target.key, queuedSend);
+  scheduleHandoffReadinessCheck();
 
   return queuedSend.finally(() => {
     if (targetSendQueues.get(target.key) === queuedSend) {
       targetSendQueues.delete(target.key);
+      scheduleHandoffReadinessCheck();
     }
   });
 }
@@ -1204,14 +1209,97 @@ function renderHandoffPanel() {
 
   if (!pending) {
     handoffPanelEl.classList.remove("visible");
+    handoffPanelEl.classList.remove("ready");
     handoffNoticeEl.textContent = "";
+    setHandoffApprovalButtonsEnabled(false, "No pending handoff.");
+    rejectHandoffButton.disabled = true;
+    handoffReadiness = { handoffId: "", ready: false, reason: "" };
+    window.clearTimeout(handoffReadinessTimer);
+    handoffReadinessTimer = null;
     return;
   }
 
   const fromName = TARGETS[pending.fromAgent] ? getAgentName(TARGETS[pending.fromAgent]) : pending.fromAgent;
   const toName = TARGETS[pending.toAgent] ? getAgentName(TARGETS[pending.toAgent]) : pending.toAgent;
+  const readiness = handoffReadiness.handoffId === pending.id
+    ? handoffReadiness
+    : { ready: false, reason: `Checking whether ${toName} is ready...` };
+
   handoffPanelEl.classList.add("visible");
-  handoffNoticeEl.textContent = `${fromName} wants to pass the mic to ${toName}.`;
+  handoffPanelEl.classList.toggle("ready", readiness.ready);
+  handoffNoticeEl.textContent = readiness.ready
+    ? `${fromName} wants to pass the mic to ${toName}.`
+    : `${fromName} wants to pass the mic to ${toName}. ${readiness.reason}`;
+  setHandoffApprovalButtonsEnabled(readiness.ready, readiness.reason);
+  rejectHandoffButton.disabled = false;
+  scheduleHandoffReadinessCheck();
+}
+
+function setHandoffApprovalButtonsEnabled(enabled, reason) {
+  for (const button of [approveHandoffButton, approveOneHandoffButton, approveThreeHandoffsButton]) {
+    button.disabled = !enabled;
+    button.title = enabled ? "" : reason;
+  }
+}
+
+function scheduleHandoffReadinessCheck(delayMs = 0) {
+  window.clearTimeout(handoffReadinessTimer);
+
+  if (!councilSession.botToBot.pendingHandoff) {
+    handoffReadinessTimer = null;
+    return;
+  }
+
+  handoffReadinessTimer = window.setTimeout(refreshHandoffReadiness, delayMs);
+}
+
+async function refreshHandoffReadiness() {
+  const pending = councilSession.botToBot.pendingHandoff;
+
+  if (!pending) {
+    return;
+  }
+
+  if (handoffReadinessCheckInFlight) {
+    scheduleHandoffReadinessCheck(250);
+    return;
+  }
+
+  handoffReadinessCheckInFlight = true;
+  let ready = false;
+  let reason = "Destination is not ready.";
+
+  try {
+    const target = TARGETS[pending.toAgent];
+    const targetTab = target ? await getCouncilTabForTarget(target) : null;
+
+    if (!target || !targetTab) {
+      reason = `${target ? getAgentName(target) : "Destination"} is disconnected or stale.`;
+    } else if (targetSendQueues.has(target.key)) {
+      reason = `${getAgentName(target)} already has a queued send.`;
+    } else if (getUnseenTurnsForTarget(target).length === 0) {
+      reason = "There is no new handoff context to send.";
+    } else {
+      const state = await sendMessageWithFallback(targetTab.id, { type: "GET_COMPOSER_STATE" });
+      ready = Boolean(state?.promptAvailable && !state?.isStreaming);
+      reason = state?.isStreaming
+        ? `${getAgentName(target)} is still responding.`
+        : `${getAgentName(target)} composer is not available.`;
+    }
+  } catch (error) {
+    reason = "Could not verify the destination composer.";
+  } finally {
+    handoffReadinessCheckInFlight = false;
+  }
+
+  if (councilSession.botToBot.pendingHandoff?.id !== pending.id) {
+    scheduleHandoffReadinessCheck(750);
+    return;
+  }
+
+  handoffReadiness = { handoffId: pending.id, ready, reason };
+  renderHandoffPanel();
+  scheduleHandoffReadinessCheck(750);
 }
 
 function getAddedTurns(previousTurns, nextTurns) {
@@ -1326,6 +1414,24 @@ async function approvePendingHandoff(turnBudget = null) {
   if (!pending) {
     setStatus("No pending handoff.");
     return;
+  }
+
+  if (
+    manualRequest &&
+    (handoffReadiness.handoffId !== pending.id || !handoffReadiness.ready)
+  ) {
+    setStatus(handoffReadiness.reason || "Handoff destination is not ready yet.");
+    scheduleHandoffReadinessCheck();
+    return;
+  }
+
+  if (manualRequest) {
+    handoffReadiness = {
+      handoffId: pending.id,
+      ready: false,
+      reason: "Sending approved handoff..."
+    };
+    renderHandoffPanel();
   }
 
   if (manualRequest && councilSession.botToBot.currentTurnCount >= councilSession.botToBot.maxTurns) {

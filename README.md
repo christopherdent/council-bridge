@@ -107,6 +107,8 @@ The first valid tag for the other council member creates a pending handoff. `@bo
 
 `Approve handoff` sends only the current pending handoff. `Approve next 1 turn` and `Approve next 3 turns` grant a short bot-to-bot budget so the next tagged assistant replies can continue automatically until the budget or safety limit is reached.
 
+The approval actions remain disabled while the destination agent is responding, disconnected, stale, already has a queued send, or has no new handoff context. The panel checks readiness continuously and enables and flashes the approval action only when the handoff can be sent. Reject remains available whenever a handoff is pending.
+
 The default bot-to-bot safety limit is 3 turns. When the limit is reached, Council Bridge stops routing and waits for the Human Gavel. Any new Christopher message resets the bot-to-bot turn count.
 
 Handoffs are blocked if the target member is stale, disconnected, or not assigned to the current council session.
