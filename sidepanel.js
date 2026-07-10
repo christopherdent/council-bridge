@@ -102,6 +102,7 @@ let deliveryState = {
 let councilSession = normalizeCouncilSession();
 const replyWatchers = new Map();
 const targetSendQueues = new Map();
+const targetSendGenerations = new Map();
 let deliveryWriteQueue = Promise.resolve();
 let handoffReadiness = { handoffId: "", ready: false, reason: "" };
 let handoffReadinessTimer = null;
@@ -409,6 +410,8 @@ async function sendComposerRoundtable(text) {
     const firstKey = getRoundtableFirstAgentKey();
     const secondKey = firstKey === TARGETS.gemini.key ? TARGETS.chatgpt.key : TARGETS.gemini.key;
     const firstTarget = TARGETS[firstKey];
+    cancelQueuedTargetSends("roundtable_started");
+    await clearBotToBotHandoff("roundtable_started");
 
     councilSession = {
       ...councilSession,
@@ -493,9 +496,17 @@ function normalizeTagAlias(value) {
 
 function sendToTarget(target, options = {}) {
   const previousSend = targetSendQueues.get(target.key) || Promise.resolve();
+  const sendGeneration = getTargetSendGeneration(target);
   const queuedSend = previousSend
     .catch(() => {})
-    .then(() => performSendToTarget(target, options));
+    .then(() => {
+      if (sendGeneration !== getTargetSendGeneration(target)) {
+        console.info(`[CouncilBridge][SEND_CANCELLED] target=${target.key} reason=stale_generation`);
+        return false;
+      }
+
+      return performSendToTarget(target, options);
+    });
 
   targetSendQueues.set(target.key, queuedSend);
   scheduleHandoffReadinessCheck();
@@ -506,6 +517,18 @@ function sendToTarget(target, options = {}) {
       scheduleHandoffReadinessCheck();
     }
   });
+}
+
+function getTargetSendGeneration(target) {
+  return targetSendGenerations.get(target.key) || 0;
+}
+
+function cancelQueuedTargetSends(reason) {
+  for (const target of Object.values(TARGETS)) {
+    targetSendGenerations.set(target.key, getTargetSendGeneration(target) + 1);
+  }
+
+  console.info(`[CouncilBridge][QUEUED_SENDS_CANCELLED] reason=${reason}`);
 }
 
 async function performSendToTarget(target, options = {}) {
@@ -617,6 +640,7 @@ async function appendTurn(turn, options = {}) {
   }
 
   if (turn.speaker === "Christopher") {
+    cancelQueuedTargetSends("new_christopher_turn");
     await resetBotToBotTurnCount();
     await resetRoundtablePendingForChristopher();
   }
@@ -1612,11 +1636,15 @@ function formatRoundtableInstruction(target, roundtable) {
     return `[Council Bridge Roundtable]
 You are Reviewer 2 in this round. The included turns should contain Christopher's prompt and ${firstName}'s response.
 
-Evaluate ${firstName}'s response independently. Agree, refine, or challenge it with concrete reasons. Do not merely edit, summarize, or echo ${firstName}. Preserve your own judgment and keep the reply concise unless Christopher asked for depth.`;
+Evaluate ${firstName}'s response independently. Agree, refine, or challenge it with concrete reasons. Do not merely edit, summarize, or echo ${firstName}. Preserve your own judgment and keep the reply concise unless Christopher asked for depth.
+
+Do not tag the other council member in a Roundtable response. Council Bridge is already handling the sequence.`;
   }
 
   return `[Council Bridge Roundtable]
 You are Reviewer 1 in this round. Give Christopher your independent answer first. Do not try to predict or force consensus with the other council member. Surface the most useful point, risk, or recommendation clearly and keep the reply concise unless Christopher asked for depth.
+
+Do not tag the other council member in a Roundtable response. Council Bridge will pass your answer to Reviewer 2 automatically.
 
 You are participating in this round as ${targetName}.`;
 }
@@ -1877,9 +1905,19 @@ async function rejectPendingHandoff() {
 }
 
 async function resetBotToBotTurnCount() {
-  if (councilSession.botToBot.currentTurnCount === 0 && councilSession.botToBot.approvedTurnsRemaining === 0) {
+  if (
+    councilSession.botToBot.currentTurnCount === 0 &&
+    councilSession.botToBot.approvedTurnsRemaining === 0 &&
+    !councilSession.botToBot.pendingHandoff
+  ) {
     return;
   }
+
+  await clearBotToBotHandoff("new_christopher_turn");
+}
+
+async function clearBotToBotHandoff(reason) {
+  const pending = councilSession.botToBot.pendingHandoff;
 
   councilSession = {
     ...councilSession,
@@ -1892,6 +1930,10 @@ async function resetBotToBotTurnCount() {
   };
 
   await saveCouncilSession();
+
+  if (pending) {
+    console.info(`[CouncilBridge][HANDOFF_CANCELLED] id=${pending.id} reason=${reason}`);
+  }
 }
 
 function formatCouncilMember(member, fallback) {
