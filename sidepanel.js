@@ -11,16 +11,19 @@ const REPLY_WATCH_INTERVAL_MS = 500;
 const REPLY_WATCH_STABLE_MS = 2000;
 const STREAM_CONFIRMED_STABLE_MS = 1200;
 const INACTIVE_REPLY_SETTLE_MS = 15000;
-const REPLY_WATCH_TIMEOUT_MS = 120000;
+const REPLY_WATCH_HARD_TIMEOUT_MS = 10 * 60 * 1000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
 const TARGET_READY_POLL_MS = 500;
 const TARGET_READY_TIMEOUT_MS = 5 * 60 * 1000;
+const EXPECTED_RESPONDER_ATTENTION_INTERVAL_MS = 4000;
+const EXPECTED_RESPONDER_STALL_MS = 3500;
 const TYPEWRITER_INTERVAL_MS = 28;
 const TYPEWRITER_MAX_DURATION_MS = 600;
 const ASSISTANT_REVEAL_GAP_MS = 2000;
 const PENDING_CONVERSATION_PREFIX = "pending";
 const FRESH_CHAT_CONTEXT_LIMIT = 24;
+const PAGE_CONTEXT_TEXT_LIMIT = 8000;
 
 const TARGETS = {
   gemini: {
@@ -88,6 +91,14 @@ const humanNicknameEl = document.getElementById("humanNickname");
 const chatgptNicknameEl = document.getElementById("chatgptNickname");
 const geminiNicknameEl = document.getElementById("geminiNickname");
 const roundtableModeEl = document.getElementById("roundtableMode");
+const roundtableAutonomousEl = document.getElementById("roundtableAutonomous");
+const roundtableTurnLimitEl = document.getElementById("roundtableTurnLimit");
+const autoRecoveryEl = document.getElementById("autoRecovery");
+const recoveryTimeoutEl = document.getElementById("recoveryTimeout");
+const attachPageContextButton = document.getElementById("attachPageContext");
+const pageContextAttachmentEl = document.getElementById("pageContextAttachment");
+const pageContextTitleEl = document.getElementById("pageContextTitle");
+const removePageContextButton = document.getElementById("removePageContext");
 const handoffPanelEl = document.getElementById("handoffPanel");
 const handoffNoticeEl = document.getElementById("handoffNotice");
 const approveHandoffButton = document.getElementById("approveHandoff");
@@ -109,6 +120,10 @@ let deliveryWriteQueue = Promise.resolve();
 let handoffReadiness = { handoffId: "", ready: false, reason: "" };
 let handoffReadinessTimer = null;
 let handoffReadinessCheckInFlight = false;
+let responderAttentionTimer = null;
+let responderAttentionOrigin = null;
+let responderAttentionInFlight = false;
+let attachedPageContext = null;
 
 let renderedTurnIds = new Set();
 const animatedTurnTextById = new Map();
@@ -132,6 +147,12 @@ humanNicknameEl.addEventListener("change", () => saveHumanNickname(humanNickname
 chatgptNicknameEl.addEventListener("change", () => saveNickname(TARGETS.chatgpt, chatgptNicknameEl.value));
 geminiNicknameEl.addEventListener("change", () => saveNickname(TARGETS.gemini, geminiNicknameEl.value));
 roundtableModeEl.addEventListener("change", toggleRoundtableMode);
+roundtableAutonomousEl.addEventListener("change", saveRoundtableAutonomy);
+roundtableTurnLimitEl.addEventListener("change", saveRoundtableAutonomy);
+autoRecoveryEl.addEventListener("change", saveRecoverySettings);
+recoveryTimeoutEl.addEventListener("change", saveRecoverySettings);
+attachPageContextButton.addEventListener("click", attachActivePageContext);
+removePageContextButton.addEventListener("click", clearAttachedPageContext);
 approveHandoffButton.addEventListener("click", () => approvePendingHandoff(0));
 rejectHandoffButton.addEventListener("click", rejectPendingHandoff);
 approveOneHandoffButton.addEventListener("click", () => approvePendingHandoff(1));
@@ -267,17 +288,20 @@ function handleComposerKeydown(event) {
 
 async function sendComposerToTarget(target, text) {
   try {
+    const pageContext = attachedPageContext;
     await captureLatestReplyFromTarget(getCounterpartTarget(target));
     await chrome.storage.local.set({
       [STORAGE_KEYS.capturedText]: text,
       [STORAGE_KEYS.draft]: ""
     });
     composerTextEl.value = "";
+    clearAttachedPageContext();
     await appendTurn({
       speaker: "User",
       text,
       target: getAgentName(target),
-      recipients: [target.key]
+      recipients: [target.key],
+      pageContext
     }, {
       allowDuplicate: true
     });
@@ -289,6 +313,7 @@ async function sendComposerToTarget(target, text) {
 
 async function sendComposerToBoth(text) {
   try {
+    const pageContext = attachedPageContext;
     await Promise.all([
       captureLatestReplyFromTarget(TARGETS.chatgpt),
       captureLatestReplyFromTarget(TARGETS.gemini)
@@ -298,11 +323,13 @@ async function sendComposerToBoth(text) {
       [STORAGE_KEYS.draft]: ""
     });
     composerTextEl.value = "";
+    clearAttachedPageContext();
     await appendTurn({
       speaker: "User",
       text,
       target: `${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`,
-      recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key]
+      recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key],
+      pageContext
     }, {
       allowDuplicate: true
     });
@@ -330,6 +357,7 @@ async function sendComposerToBoth(text) {
 
 async function sendComposerRoundtable(text) {
   try {
+    const pageContext = attachedPageContext;
     await Promise.all([
       captureLatestReplyFromTarget(TARGETS.chatgpt),
       captureLatestReplyFromTarget(TARGETS.gemini)
@@ -339,19 +367,20 @@ async function sendComposerRoundtable(text) {
       [STORAGE_KEYS.draft]: ""
     });
     composerTextEl.value = "";
+    clearAttachedPageContext();
 
     await appendTurn({
       speaker: "User",
       text,
       target: `Roundtable: ${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`,
-      recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key]
+      recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key],
+      pageContext
     }, {
       allowDuplicate: true
     });
 
     const sourceTurn = turns.at(-1);
     const firstKey = getRoundtableFirstAgentKey();
-    const secondKey = firstKey === TARGETS.gemini.key ? TARGETS.chatgpt.key : TARGETS.gemini.key;
     const firstTarget = TARGETS[firstKey];
     cancelQueuedTargetSends("roundtable_started");
     await clearBotToBotHandoff("roundtable_started");
@@ -360,23 +389,26 @@ async function sendComposerRoundtable(text) {
       ...councilSession,
       roundtable: {
         ...councilSession.roundtable,
-        pending: {
+        pending: CouncilBridgeOrchestration.createRoundtableTransaction({
           id: `roundtable_${Date.now()}_${Math.random().toString(16).slice(2)}`,
           sourceTurnId: sourceTurn?.id || "",
           firstAgent: firstKey,
-          secondAgent: secondKey,
-          createdAt: Date.now(),
-          status: "waiting_first_reply"
-        }
+          autonomous: councilSession.roundtable.autonomous.enabled,
+          maxTurns: councilSession.roundtable.autonomous.maxTurns,
+          createdAt: Date.now()
+        })
       }
     };
     await saveCouncilSession();
 
-    console.info(`[CouncilBridge][ROUNDTABLE_STARTED] id=${councilSession.roundtable.pending.id} first=${firstKey} second=${secondKey} sourceTurnId=${sourceTurn?.id || ""}`);
+    console.info(`[CouncilBridge][ROUNDTABLE_STARTED] id=${councilSession.roundtable.pending.id} first=${firstKey} maxTurns=${councilSession.roundtable.pending.maxTurns} autonomous=${councilSession.roundtable.pending.autonomous} sourceTurnId=${sourceTurn?.id || ""}`);
 
     const sent = await sendToTarget(firstTarget, {
       roundtable: {
-        position: "first"
+        position: "first",
+        turnNumber: 1,
+        maxTurns: councilSession.roundtable.pending.maxTurns,
+        autonomous: councilSession.roundtable.pending.autonomous
       }
     });
 
@@ -390,10 +422,11 @@ async function sendComposerRoundtable(text) {
         ...councilSession,
         roundtable: {
           ...councilSession.roundtable,
-          pending: {
-            ...councilSession.roundtable.pending,
-            firstSentAt: Date.now()
-          }
+          pending: CouncilBridgeOrchestration.markRoundtableSent(
+            councilSession.roundtable.pending,
+            firstKey,
+            Date.now()
+          )
         }
       };
       await saveCouncilSession();
@@ -474,6 +507,11 @@ function cancelQueuedTargetSends(reason) {
   console.info(`[CouncilBridge][QUEUED_SENDS_CANCELLED] reason=${reason}`);
 }
 
+function cancelQueuedSendForTarget(target, reason) {
+  targetSendGenerations.set(target.key, getTargetSendGeneration(target) + 1);
+  console.info(`[CouncilBridge][QUEUED_SEND_CANCELLED] target=${target.key} reason=${reason}`);
+}
+
 async function performSendToTarget(target, options = {}) {
   let turnsToSend = getUnseenTurnsForTarget(target);
   const tab = await getCouncilTabForTarget(target);
@@ -514,12 +552,14 @@ async function performSendToTarget(target, options = {}) {
   }
 
   if (!councilSession.paused) {
+    await captureResponderAttentionOrigin();
     startReplyWatcher(target, latestReplyBeforeSend);
   }
 
   let response = await insertPromptInTab(tab.id, prompt, {
     showAlerts: false,
-    submit: true
+    submit: true,
+    keepTargetActive: true
   });
 
   if (response?.ok && response?.submitted) {
@@ -531,7 +571,8 @@ async function performSendToTarget(target, options = {}) {
   await focusTab(tab);
   response = await insertPromptInTab(tab.id, prompt, {
     showAlerts: true,
-    submit: true
+    submit: true,
+    keepTargetActive: true
   });
 
   if (response?.ok && response?.submitted) {
@@ -595,7 +636,8 @@ async function appendTurn(turn, options = {}) {
     speaker: turn.speaker,
     text: turn.text,
     target: turn.target,
-    recipients: Array.isArray(turn.recipients) ? turn.recipients : undefined
+    recipients: Array.isArray(turn.recipients) ? turn.recipients : undefined,
+    pageContext: normalizePageContext(turn.pageContext)
   };
   const nextTurns = [
     ...turns,
@@ -608,10 +650,15 @@ async function appendTurn(turn, options = {}) {
   return true;
 }
 
-function startReplyWatcher(target, baselineText) {
-  stopReplyWatcher(target.label);
+function startReplyWatcher(target, baselineText, options = {}) {
+  const replacingWatcher = replyWatchers.has(target.label);
+  if (replacingWatcher) {
+    stopReplyWatcher(target.label, { preserveAttention: true });
+  }
+  const shouldCaptureAttentionOrigin = !responderAttentionOrigin;
 
   const watcher = {
+    target,
     baselineSignature: getReplySignature(baselineText),
     candidateSignature: "",
     candidateText: "",
@@ -619,10 +666,19 @@ function startReplyWatcher(target, baselineText) {
     candidateConfirmedNotStreaming: false,
     lastCommittedSignature: "",
     startedAt: Date.now(),
+    lastProgressAt: Date.now(),
+    lastAttentionAt: Date.now(),
+    lastStreaming: false,
+    recoveryAttempted: Boolean(options.recoveryAttempted),
+    recoveryStarted: false,
     timeoutId: null
   };
 
   replyWatchers.set(target.label, watcher);
+  if (shouldCaptureAttentionOrigin) {
+    captureResponderAttentionOrigin();
+  }
+  scheduleResponderAttention();
   renderTurns();
 
   async function tick() {
@@ -630,8 +686,26 @@ function startReplyWatcher(target, baselineText) {
       return;
     }
 
-    if (Date.now() - watcher.startedAt > REPLY_WATCH_TIMEOUT_MS) {
+    const elapsedMs = Date.now() - watcher.startedAt;
+    const recoveryTimeoutMs = councilSession.recovery.timeoutMinutes * 60 * 1000;
+
+    if (
+      councilSession.recovery.enabled &&
+      !watcher.recoveryAttempted &&
+      !watcher.recoveryStarted &&
+      elapsedMs >= recoveryTimeoutMs
+    ) {
+      watcher.recoveryStarted = true;
+      stopReplyWatcher(target.label, { preserveAttention: true });
+      recoverStalledResponder(target).catch((error) => {
+        setStatus(`Automatic ${getAgentName(target)} recovery failed: ${getErrorMessage(error)}`);
+      });
+      return;
+    }
+
+    if (elapsedMs > REPLY_WATCH_HARD_TIMEOUT_MS) {
       stopReplyWatcher(target.label);
+      setStatus(`${getAgentName(target)} did not respond; automatic recovery has stopped.`);
       return;
     }
 
@@ -639,6 +713,11 @@ function startReplyWatcher(target, baselineText) {
       const { text, isStreaming, isActive } = await getLatestReplyStateFromTarget(target);
       const signature = getReplySignature(text);
       const duplicate = isDuplicateTurn({ speaker: target.label, text });
+
+      if (signature !== watcher.candidateSignature || isStreaming !== watcher.lastStreaming) {
+        watcher.lastProgressAt = Date.now();
+      }
+      watcher.lastStreaming = isStreaming;
 
       if (
         text.length >= REPLY_WATCH_MIN_LENGTH &&
@@ -728,7 +807,7 @@ async function commitWatcherReply(target, text) {
   }
 }
 
-function stopReplyWatcher(label) {
+function stopReplyWatcher(label, options = {}) {
   const watcher = replyWatchers.get(label);
 
   if (watcher?.timeoutId) {
@@ -736,7 +815,120 @@ function stopReplyWatcher(label) {
   }
 
   replyWatchers.delete(label);
+  if (replyWatchers.size === 0 && !options.preserveAttention) {
+    stopResponderAttention();
+    restoreResponderAttentionOrigin();
+  }
   renderTurns();
+}
+
+async function captureResponderAttentionOrigin() {
+  if (responderAttentionOrigin) {
+    return;
+  }
+
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (activeTab?.id) {
+    responderAttentionOrigin = {
+      tabId: activeTab.id,
+      windowId: activeTab.windowId
+    };
+  }
+}
+
+function scheduleResponderAttention(delayMs = EXPECTED_RESPONDER_ATTENTION_INTERVAL_MS) {
+  window.clearTimeout(responderAttentionTimer);
+
+  if (replyWatchers.size === 0) {
+    responderAttentionTimer = null;
+    return;
+  }
+
+  responderAttentionTimer = window.setTimeout(prioritizeStalledExpectedResponder, delayMs);
+}
+
+async function prioritizeStalledExpectedResponder() {
+  if (responderAttentionInFlight || replyWatchers.size === 0) {
+    scheduleResponderAttention();
+    return;
+  }
+
+  responderAttentionInFlight = true;
+
+  try {
+    const now = Date.now();
+    const candidates = Array.from(replyWatchers.values())
+      .filter((watcher) => !watcher.recoveryStarted && now - watcher.lastProgressAt >= EXPECTED_RESPONDER_STALL_MS)
+      .sort((first, second) => first.lastAttentionAt - second.lastAttentionAt);
+    const watcher = candidates[0];
+
+    if (!watcher) {
+      return;
+    }
+
+    const tab = await getCouncilTabForTarget(watcher.target);
+
+    if (!tab) {
+      return;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: "PRIORITIZE_EXPECTED_RESPONDER",
+      tabId: tab.id
+    });
+
+    if (response?.ok) {
+      watcher.lastAttentionAt = now;
+      console.info(`[CouncilBridge][EXPECTED_RESPONDER_ATTENTION] target=${watcher.target.key} tabId=${tab.id}`);
+    }
+  } catch (error) {
+    console.warn(`[CouncilBridge][EXPECTED_RESPONDER_ATTENTION_FAILED] error=${getErrorMessage(error)}`);
+  } finally {
+    responderAttentionInFlight = false;
+    scheduleResponderAttention();
+  }
+}
+
+function stopResponderAttention() {
+  window.clearTimeout(responderAttentionTimer);
+  responderAttentionTimer = null;
+}
+
+async function restoreResponderAttentionOrigin() {
+  const origin = responderAttentionOrigin;
+  responderAttentionOrigin = null;
+
+  if (!origin?.tabId) {
+    return;
+  }
+
+  try {
+    const originTab = await chrome.tabs.get(origin.tabId);
+    const focusedWindow = await chrome.windows.getLastFocused();
+    const [focusedActiveTab] = await chrome.tabs.query({
+      active: true,
+      windowId: focusedWindow.id
+    });
+
+    if (
+      focusedActiveTab?.id !== origin.tabId &&
+      !getCouncilMemberKeyForTab(focusedActiveTab, { allowStale: true })
+    ) {
+      return;
+    }
+
+    await focusTab(originTab);
+    console.info(`[CouncilBridge][RESPONDER_ATTENTION_RESTORED] tabId=${origin.tabId}`);
+  } catch (error) {
+    console.info(`[CouncilBridge][RESPONDER_ATTENTION_RESTORE_SKIPPED] error=${getErrorMessage(error)}`);
+  }
+}
+
+async function recoverStalledResponder(target) {
+  console.warn(`[CouncilBridge][STALL_RECOVERY_STARTED] target=${target.key} timeoutMinutes=${councilSession.recovery.timeoutMinutes}`);
+  setStatus(`${getAgentName(target)} stalled; opening one fresh context-seeded chat.`);
+  await startFreshCouncilChat(target, { automaticRecovery: true });
 }
 
 function getUnseenTurnsForTarget(target) {
@@ -871,13 +1063,29 @@ function formatTurnsForPrompt(turnsToSend) {
 
 function formatTurnForPrompt(turn) {
   const speaker = getPromptSpeaker(turn.speaker);
+  const pageContext = formatPageContextForPrompt(turn.pageContext);
 
   return `Timestamp: ${formatTimestampForPrompt(turn.createdAt)}
 ${speaker.saidLine}:
 
 --- BEGIN ${speaker.blockLabel} MESSAGE ---
 ${turn.text}
---- END ${speaker.blockLabel} MESSAGE ---`;
+--- END ${speaker.blockLabel} MESSAGE ---${pageContext ? `\n\n${pageContext}` : ""}`;
+}
+
+function formatPageContextForPrompt(value) {
+  const pageContext = normalizePageContext(value);
+
+  if (!pageContext) {
+    return "";
+  }
+
+  return `--- BEGIN USER-SHARED PAGE CONTEXT ---
+Title: ${pageContext.title || "Untitled page"}
+URL: ${pageContext.url}
+${pageContext.selection ? `Selected text:\n${pageContext.selection}\n\n` : ""}Visible page excerpt:
+${pageContext.text}
+--- END USER-SHARED PAGE CONTEXT ---`;
 }
 
 function formatTimestampForPrompt(value) {
@@ -1107,6 +1315,15 @@ function renderTurns() {
 
     metaEl.append(speakerEl, detailsEl);
     turnEl.append(metaEl, textEl);
+
+    const pageContext = normalizePageContext(turn.pageContext);
+    if (pageContext) {
+      const contextEl = document.createElement("p");
+      contextEl.className = "turn-context";
+      contextEl.textContent = `Page context: ${pageContext.title || pageContext.url}`;
+      contextEl.title = pageContext.url;
+      turnEl.append(contextEl);
+    }
     turnsEl.append(turnEl);
   }
 
@@ -1219,7 +1436,8 @@ function normalizeCouncilSession(value) {
       gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
     },
     botToBot: normalizeBotToBotState(value?.botToBot),
-    roundtable: normalizeRoundtableState(value?.roundtable),
+    roundtable: CouncilBridgeOrchestration.normalizeRoundtableState(value?.roundtable),
+    recovery: normalizeRecoveryState(value?.recovery),
     members: {
       chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
       gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
@@ -1227,42 +1445,14 @@ function normalizeCouncilSession(value) {
   };
 }
 
-function normalizeRoundtableState(value) {
-  const nextFirst = [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(value?.nextFirst)
-    ? value.nextFirst
-    : TARGETS.gemini.key;
+function normalizeRecoveryState(value) {
+  const timeoutMinutes = [5, 7, 10].includes(Number(value?.timeoutMinutes))
+    ? Number(value.timeoutMinutes)
+    : 7;
 
   return {
-    enabled: Boolean(value?.enabled),
-    nextFirst,
-    pending: normalizeRoundtablePending(value?.pending)
-  };
-}
-
-function normalizeRoundtablePending(value) {
-  if (!value?.id || value.status !== "waiting_first_reply") {
-    return null;
-  }
-
-  const firstAgent = [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(value.firstAgent)
-    ? value.firstAgent
-    : "";
-  const secondAgent = [TARGETS.gemini.key, TARGETS.chatgpt.key].includes(value.secondAgent)
-    ? value.secondAgent
-    : "";
-
-  if (!firstAgent || !secondAgent || firstAgent === secondAgent) {
-    return null;
-  }
-
-  return {
-    id: value.id,
-    sourceTurnId: value.sourceTurnId || "",
-    firstAgent,
-    secondAgent,
-    createdAt: Number(value.createdAt) || Date.now(),
-    firstSentAt: Number(value.firstSentAt) || 0,
-    status: "waiting_first_reply"
+    enabled: value?.enabled !== false,
+    timeoutMinutes
   };
 }
 
@@ -1384,17 +1574,22 @@ async function removeActiveTabFromCouncil() {
   setStatus(`Removed ${removedName} from the council.`);
 }
 
-async function startFreshCouncilChat(target) {
+async function startFreshCouncilChat(target, options = {}) {
   try {
     const nickname = getAgentName(target);
-    const tab = await chrome.tabs.create({ url: target.openUrl, active: true });
+    const tab = await chrome.tabs.create({
+      url: target.openUrl,
+      active: !options.automaticRecovery
+    });
     await waitForTabReady(tab.id);
     const currentTab = await chrome.tabs.get(tab.id);
     const conversationId = extractConversationId(currentTab.url, target.key) || createPendingConversationId(target.key);
     const contextTurns = getFreshChatContextTurns();
 
-    stopReplyWatcher(target.label);
-    cancelQueuedTargetSends(`fresh_${target.key}_chat`);
+    stopReplyWatcher(target.label, {
+      preserveAttention: Boolean(options.automaticRecovery)
+    });
+    cancelQueuedSendForTarget(target, `fresh_${target.key}_chat`);
 
     councilSession = {
       ...councilSession,
@@ -1423,22 +1618,29 @@ async function startFreshCouncilChat(target) {
     await saveCouncilSession();
 
     const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
-    const prompt = buildFreshChatPrompt(target, contextTurns);
+    const prompt = buildFreshChatPrompt(target, contextTurns, options);
 
     if (!councilSession.paused) {
-      startReplyWatcher(target, latestReplyBeforeSend);
+      await captureResponderAttentionOrigin();
+      startReplyWatcher(target, latestReplyBeforeSend, {
+        recoveryAttempted: Boolean(options.automaticRecovery)
+      });
     }
 
     const response = await insertPromptInTab(currentTab.id, prompt, {
       showAlerts: true,
-      submit: true
+      submit: true,
+      keepTargetActive: true
     });
 
     if (response?.ok && response?.submitted) {
       if (contextTurns.length > 0) {
         await markTargetAdvised(target, contextTurns);
       }
-      setStatus(`Started fresh ${nickname} chat with recent context.`);
+      console.info(`[CouncilBridge][FRESH_CHAT_READY] target=${target.key} automaticRecovery=${Boolean(options.automaticRecovery)}`);
+      setStatus(options.automaticRecovery
+        ? `Recovered ${nickname} in a fresh chat with the outstanding request.`
+        : `Started fresh ${nickname} chat with recent context.`);
       return;
     }
 
@@ -1454,7 +1656,7 @@ function getFreshChatContextTurns() {
   return turns.slice(-FRESH_CHAT_CONTEXT_LIMIT);
 }
 
-function buildFreshChatPrompt(target, contextTurns) {
+function buildFreshChatPrompt(target, contextTurns, options = {}) {
   const targetName = getAgentName(target);
   const otherTarget = getCounterpartTarget(target);
   const otherName = getAgentName(otherTarget);
@@ -1469,7 +1671,9 @@ You are ${targetName}, joining an existing Council Bridge session in a fresh bro
 Human user: ${humanName}
 Other council member: ${otherName}
 
-Use the recent context below to rejoin the discussion. Do not replay or answer every old turn. Acknowledge briefly that you are caught up, then wait for the next message unless the latest turn clearly asks for a current response.
+Use the recent context below to rejoin the discussion. Do not replay or answer every old turn. ${options.automaticRecovery
+    ? `The previous ${targetName} tab did not produce the expected response. Answer the latest outstanding request now, using the context needed from the recent turns.`
+    : "Acknowledge briefly that you are caught up, then wait for the next message unless the latest turn clearly asks for a current response."}
 
 Recent council context, newest last:
 
@@ -1506,6 +1710,39 @@ async function toggleRoundtableMode() {
   setStatus(councilSession.roundtable.enabled ? "Roundtable mode enabled." : "Roundtable mode disabled.");
 }
 
+async function saveRoundtableAutonomy() {
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      autonomous: {
+        enabled: roundtableAutonomousEl.checked,
+        maxTurns: CouncilBridgeOrchestration.clampTurnCount(roundtableTurnLimitEl.value)
+      }
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus(councilSession.roundtable.autonomous.enabled
+    ? `Have at it set to ${councilSession.roundtable.autonomous.maxTurns} turns.`
+    : "Have at it disabled.");
+}
+
+async function saveRecoverySettings() {
+  councilSession = {
+    ...councilSession,
+    recovery: {
+      enabled: autoRecoveryEl.checked,
+      timeoutMinutes: Number(recoveryTimeoutEl.value)
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus(councilSession.recovery.enabled
+    ? `Stalled replies will recover after ${councilSession.recovery.timeoutMinutes} minutes.`
+    : "Automatic stalled-reply recovery disabled.");
+}
+
 async function saveCouncilSession() {
   councilSession = normalizeCouncilSession(councilSession);
   await chrome.storage.local.set({ [STORAGE_KEYS.session]: councilSession });
@@ -1518,19 +1755,30 @@ function renderCouncilSession() {
   chatgptNicknameEl.value = getAgentName(TARGETS.chatgpt);
   geminiNicknameEl.value = getAgentName(TARGETS.gemini);
   roundtableModeEl.checked = councilSession.roundtable.enabled;
+  roundtableAutonomousEl.checked = councilSession.roundtable.autonomous.enabled;
+  roundtableAutonomousEl.disabled = !councilSession.roundtable.enabled;
+  roundtableTurnLimitEl.value = String(councilSession.roundtable.autonomous.maxTurns);
+  roundtableTurnLimitEl.disabled = !councilSession.roundtable.enabled || !councilSession.roundtable.autonomous.enabled;
+  autoRecoveryEl.checked = councilSession.recovery.enabled;
+  recoveryTimeoutEl.value = String(councilSession.recovery.timeoutMinutes);
+  recoveryTimeoutEl.disabled = !councilSession.recovery.enabled;
   composerTextEl.placeholder = `Write as ${getHumanName()}...`;
 
   const chatgpt = formatCouncilMember(councilSession.members.chatgpt, "not set");
   const gemini = formatCouncilMember(councilSession.members.gemini, "not set");
   const state = councilSession.paused ? "paused" : "active";
   const roundtable = councilSession.roundtable.enabled
-    ? `on; next first: ${getAgentName(TARGETS[councilSession.roundtable.nextFirst])}`
+    ? `on; next first: ${getAgentName(TARGETS[councilSession.roundtable.nextFirst])}${councilSession.roundtable.autonomous.enabled ? `; have at it: ${councilSession.roundtable.autonomous.maxTurns} turns` : ""}`
+    : "off";
+  const recovery = councilSession.recovery.enabled
+    ? `${councilSession.recovery.timeoutMinutes} min`
     : "off";
 
   sessionSummaryEl.textContent = `Council capture: ${state}
 ChatGPT: ${chatgpt}
 Gemini: ${gemini}
-Roundtable: ${roundtable}`;
+Roundtable: ${roundtable}
+Stall recovery: ${recovery}`;
   toggleCapturePauseButton.textContent = councilSession.paused ? "Resume capture" : "Pause capture";
 }
 
@@ -1639,53 +1887,91 @@ async function continueRoundtableForTurn(turn) {
     return false;
   }
 
-  const firstTarget = TARGETS[pending.firstAgent];
-  const secondTarget = TARGETS[pending.secondAgent];
+  const speakerAgent = getTargetKeyForSpeaker(turn.speaker);
+  const result = CouncilBridgeOrchestration.acceptRoundtableReply(
+    pending,
+    speakerAgent,
+    turn.createdAt
+  );
 
-  if (!firstTarget || !secondTarget || turn.speaker !== firstTarget.label) {
+  if (!result.accepted) {
     return false;
   }
 
-  const earliestReplyAt = pending.firstSentAt || pending.createdAt;
+  console.info(`[CouncilBridge][ROUNDTABLE_REPLY] id=${pending.id} speaker=${speakerAgent} turn=${result.pending.completedTurns}/${pending.maxTurns} turnId=${turn.id}`);
 
-  if (turn.createdAt < earliestReplyAt) {
-    return false;
-  }
-
-  console.info(`[CouncilBridge][ROUNDTABLE_FIRST_REPLY] id=${pending.id} first=${pending.firstAgent} second=${pending.secondAgent} turnId=${turn.id}`);
-  setStatus(`Roundtable: passing ${getAgentName(firstTarget)}'s reply to ${getAgentName(secondTarget)}.`);
-
-  const sent = await sendToTarget(secondTarget, {
-    roundtable: {
-      position: "second",
-      firstName: getAgentName(firstTarget)
-    }
-  });
-
-  if (!sent) {
-    await clearRoundtablePending("Roundtable could not send the second turn.");
+  if (result.complete) {
+    const nextFirst = CouncilBridgeOrchestration.getCounterpartAgent(pending.firstAgent);
+    councilSession = {
+      ...councilSession,
+      roundtable: {
+        ...councilSession.roundtable,
+        nextFirst,
+        pending: null
+      }
+    };
+    await saveCouncilSession();
+    console.info(`[CouncilBridge][ROUNDTABLE_COMPLETED] id=${pending.id} turns=${result.pending.completedTurns} nextFirst=${nextFirst}`);
+    setStatus(`Roundtable completed ${result.pending.completedTurns} turns.`);
     return true;
   }
+
+  const nextTarget = TARGETS[result.nextAgent];
+  const previousTarget = TARGETS[speakerAgent];
+  const nextPending = CouncilBridgeOrchestration.markRoundtableSent(
+    result.pending,
+    result.nextAgent,
+    Date.now()
+  );
 
   councilSession = {
     ...councilSession,
     roundtable: {
       ...councilSession.roundtable,
-      nextFirst: pending.secondAgent,
-      pending: null
+      pending: nextPending
     }
   };
   await saveCouncilSession();
-  console.info(`[CouncilBridge][ROUNDTABLE_COMPLETED] id=${pending.id} first=${pending.firstAgent} second=${pending.secondAgent}`);
-  setStatus(`Roundtable sent context to ${getAgentName(secondTarget)}.`);
+
+  const nextTurnNumber = nextPending.completedTurns + 1;
+  setStatus(`Roundtable: turn ${nextTurnNumber} of ${nextPending.maxTurns} goes to ${getAgentName(nextTarget)}.`);
+
+  const sent = await sendToTarget(nextTarget, {
+    roundtable: {
+      position: nextTurnNumber === 2 ? "second" : "continuation",
+      priorName: getAgentName(previousTarget),
+      turnNumber: nextTurnNumber,
+      maxTurns: nextPending.maxTurns,
+      autonomous: nextPending.autonomous
+    }
+  });
+
+  if (!sent) {
+    await clearRoundtablePending(`Roundtable could not send turn ${nextTurnNumber}.`);
+    return true;
+  }
+
+  console.info(`[CouncilBridge][ROUNDTABLE_ADVANCED] id=${pending.id} from=${speakerAgent} to=${result.nextAgent} turn=${nextTurnNumber}/${nextPending.maxTurns}`);
   return true;
 }
 
 function formatRoundtableInstruction(target, roundtable) {
   const targetName = getAgentName(target);
 
+  if (roundtable.autonomous && roundtable.position !== "first") {
+    const priorName = roundtable.priorName || "the other council member";
+    const finalTurn = roundtable.turnNumber >= roundtable.maxTurns;
+
+    return `[Council Bridge Roundtable: Have at It]
+This is turn ${roundtable.turnNumber} of ${roundtable.maxTurns}. ${priorName} just spoke. Respond directly to the latest contribution and advance the discussion with your own judgment. Challenge weak assumptions, resolve a disagreement, or add a concrete implication; do not restart the topic or merely agree.
+
+${finalTurn ? `This is the final autonomous turn. Give ${getHumanName()} a concise synthesis of the strongest conclusion, remaining disagreement, and recommended next step.` : `Leave a clear point for ${priorName} to address on the next turn.`}
+
+Do not tag the other council member. Council Bridge is already handling the bounded sequence.`;
+  }
+
   if (roundtable.position === "second") {
-    const firstName = roundtable.firstName || "Reviewer 1";
+    const firstName = roundtable.priorName || "Reviewer 1";
 
     return `[Council Bridge Roundtable]
 You are Reviewer 2 in this round. The included turns should contain ${getHumanName()}'s prompt and ${firstName}'s response.
@@ -1699,6 +1985,8 @@ Do not tag the other council member in a Roundtable response. Council Bridge is 
 You are Reviewer 1 in this round. Give ${getHumanName()} your independent answer first. Do not try to predict or force consensus with the other council member. Surface the most useful point, risk, or recommendation clearly and keep the reply concise unless ${getHumanName()} asked for depth.
 
 Do not tag the other council member in a Roundtable response. Council Bridge will pass your answer to Reviewer 2 automatically.
+
+${roundtable.autonomous ? `This begins a bounded ${roundtable.maxTurns}-turn Have at It exchange. Focus on the topic and leave a substantive point for the other council member to address.` : ""}
 
 You are participating in this round as ${targetName}.`;
 }
@@ -2067,6 +2355,107 @@ async function saveDraft() {
   await chrome.storage.local.set({ [STORAGE_KEYS.draft]: composerTextEl.value });
 }
 
+async function attachActivePageContext() {
+  try {
+    const activeTab = await getActiveTab();
+
+    if (!activeTab?.id || !isShareablePageUrl(activeTab.url)) {
+      setStatus("Open a normal web page before attaching page context.");
+      return;
+    }
+
+    if (Object.values(TARGETS).some((target) => activeTab.url.startsWith(target.openUrl))) {
+      setStatus("Council chat tabs are already captured as conversation turns.");
+      return;
+    }
+
+    const parsedUrl = new URL(activeTab.url);
+    const originPattern = `${parsedUrl.origin}/*`;
+    const hasPermission = await chrome.permissions.contains({ origins: [originPattern] });
+    const granted = hasPermission || await chrome.permissions.request({ origins: [originPattern] });
+
+    if (!granted) {
+      setStatus("Page access was not granted.");
+      return;
+    }
+
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId: activeTab.id },
+      func: extractPageContextFromDocument,
+      args: [PAGE_CONTEXT_TEXT_LIMIT]
+    });
+
+    attachedPageContext = normalizePageContext(result?.result);
+
+    if (!attachedPageContext) {
+      setStatus("No readable page text was found.");
+      return;
+    }
+
+    renderPageContextAttachment();
+    setStatus(`Attached page context from ${attachedPageContext.title || parsedUrl.hostname}.`);
+  } catch (error) {
+    setStatus(`Could not attach page context: ${getErrorMessage(error)}`);
+  }
+}
+
+function extractPageContextFromDocument(limit) {
+  const normalize = (value) => String(value || "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const selection = normalize(window.getSelection()?.toString() || "");
+  const description = normalize(document.querySelector('meta[name="description"]')?.content || "");
+  const visibleText = normalize(document.body?.innerText || "");
+  const combinedText = description && !visibleText.startsWith(description)
+    ? `${description}\n\n${visibleText}`
+    : visibleText;
+
+  return {
+    title: normalize(document.title),
+    url: location.href,
+    selection: selection.slice(0, Math.min(3000, limit)),
+    text: combinedText.slice(0, limit),
+    capturedAt: Date.now()
+  };
+}
+
+function isShareablePageUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch (error) {
+    return false;
+  }
+}
+
+function normalizePageContext(value) {
+  if (!value?.url || !value?.text) {
+    return null;
+  }
+
+  return {
+    title: String(value.title || "").trim().slice(0, 300),
+    url: String(value.url).trim().slice(0, 2000),
+    selection: String(value.selection || "").trim().slice(0, 3000),
+    text: String(value.text || "").trim().slice(0, PAGE_CONTEXT_TEXT_LIMIT),
+    capturedAt: normalizeTimestamp(value.capturedAt)
+  };
+}
+
+function clearAttachedPageContext() {
+  attachedPageContext = null;
+  renderPageContextAttachment();
+}
+
+function renderPageContextAttachment() {
+  pageContextAttachmentEl.hidden = !attachedPageContext;
+  pageContextTitleEl.textContent = attachedPageContext
+    ? `Page: ${attachedPageContext.title || attachedPageContext.url}`
+    : "";
+}
+
 async function getActiveTab() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return activeTab || null;
@@ -2368,7 +2757,9 @@ async function insertPromptInTab(tabId, text, options) {
         await delay(BACKGROUND_SUBMIT_ACTIVE_HOLD_MS);
       }
 
-      const restoreTargetId = wakeResponse.previousTabId ?? tabId;
+      const restoreTargetId = options?.keepTargetActive
+        ? null
+        : (wakeResponse.previousTabId ?? tabId);
       await restoreTabAfterInjection(restoreTargetId, wakeResponse.windowId, wakeResponse.lockId, wakeResponse.previousWindowId);
     }
   }

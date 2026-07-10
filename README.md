@@ -2,7 +2,7 @@
 
 Council Bridge is a tiny Chrome and Edge extension for coordinating assigned ChatGPT and Gemini browser tabs from a persistent side panel. It tracks typed human turns and captured assistant replies, wraps unseen turns in direction-specific prompts, inserts them into the target service, and clicks send from the side panel.
 
-The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows text you write as yourself, latest replies you refresh, and automatically captured completed AI replies. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
+The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts through the assigned Council conversations. While a reply is outstanding, Council Bridge keeps the expected responder active and selectively reactivates only responders whose output has stopped progressing. When the replies finish, it restores the prior non-Council tab when doing so will not override a tab you selected yourself. The side panel shows text you write as yourself, latest replies you refresh, and automatically captured completed AI replies. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
 
 It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 
@@ -75,6 +75,8 @@ When Council Bridge sends to an agent, it includes every transcript turn that ag
 
 If an agent is still responding, Council Bridge queues that agent's next send for up to five minutes. It waits in the side panel without holding the browser on the target tab, then batches all still-unseen turns and submits them when the composer becomes available. Sends to the same agent run one at a time so rapid messages cannot race in the target composer.
 
+After a prompt is submitted, the destination becomes an expected responder. Council Bridge keeps that tab active in its window while the reply is being generated. If multiple expected responders share one window, it rotates attention only when an inactive responder has stopped making progress; it does not cycle unrelated tabs. This is a best-effort workaround for browser background-page throttling.
+
 The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that the configured human user is coordinating ChatGPT and Gemini through the side panel. The first send bundles three things:
 
 - the Council Bridge overview,
@@ -87,9 +89,15 @@ The disposition sets each agent up as an independent engineering peer rather tha
 
 Enable `Roundtable mode` in Council setup when you want a group message to run sequentially instead of in parallel.
 
+With Roundtable mode off, Council Bridge is in Fluid mode: group messages are submitted to both members without imposing a response order, and whichever completed reply is captured first appears first.
+
 In Roundtable mode, a group send goes to one council member first. When that reply is captured, Council Bridge sends the still-unseen context to the other member, so the second response includes the human user's message plus the first agent's answer. The starting member alternates each round.
 
 Single-member route tags still send directly to that member. Bot-to-bot Human Gavel handoffs still work for normal assistant replies outside the active Roundtable pass.
+
+Enable `Have at it` under Roundtable mode to let the two agents continue the same topic for a bounded number of alternating turns without requiring tags or Human Gavel approval between turns. Set the turn count from 2 through 10. The starting member still alternates between separate Roundtables, each transaction has one deterministic expected responder at a time, and the final autonomous turn is instructed to synthesize the strongest conclusion, remaining disagreement, and next step for the human user.
+
+Typing a new human message, turning Roundtable mode off, or clearing the conversation stops an in-progress autonomous Roundtable. `Have at it` is separate from ordinary bot-to-bot tagged handoffs and does not consume their approval budget.
 
 ### Bot-to-Bot Handoffs
 
@@ -136,6 +144,14 @@ Use `Refresh replies` to manually pull the latest visible reply from both regist
 
 Use `New GPT` or `New Gem` in Council setup when a ChatGPT or Gemini tab gets slow. Council Bridge opens a fresh tab, assigns it as that council member, and seeds it with a bounded recent-context packet so it can rejoin the wider discussion. The seed prompt is intentionally compact; it asks the agent to acknowledge that it is caught up rather than replaying the whole transcript.
 
+`Recover stalled replies` performs the same replacement automatically when an expected responder produces no captured reply for the selected 5, 7, or 10 minute timeout. Recovery makes one attempt for that outstanding reply: it opens a fresh inactive tab, replaces only the stalled member's routing address, seeds recent Council context, and asks the replacement to answer the latest outstanding request. If the replacement also stalls, Council Bridge stops after the hard timeout instead of opening tabs indefinitely.
+
+### Active Page Context
+
+Use the paperclip button above the composer to attach the currently active non-chat web page to your next message. Council Bridge asks for access to that site's origin when needed, then captures the page title, URL, selected text, and a bounded visible-text excerpt. The attachment appears beside the button and can be removed before sending.
+
+Page context is explicit and one-shot: it is attached only after you click the button, it is sent only with the next human turn, and it is then cleared from the composer. ChatGPT and Gemini conversation tabs cannot be attached this way because their messages already flow through the Council transcript. Browser internal pages such as `chrome://` cannot be captured.
+
 ### Pause and Reset
 
 Use `Pause capture` if you want to inspect an unrelated tab or conversation without collecting new AI replies. While paused, automatic reply capture and manual reply refresh do not add turns.
@@ -175,15 +191,19 @@ ChatGPT, please respond to the user and Gemini. Agree, disagree, refine the plan
 - Auto-submit depends on finding an enabled send button
 - Refresh replies uses best-effort selectors for the latest visible ChatGPT and Gemini response
 - Automatic reply capture waits for best-effort response stability and stop-button detection
-- Background send may fall back to focusing the destination tab if the inactive page does not accept insertion or submit events
+- Expected-responder activation changes the visible tab when Council agents share the current browser window; this is intentional and the prior tab is restored after replies finish when safe
+- Browser throttling is controlled by Chrome and cannot be disabled by an extension; targeted activation substantially reduces stalls but remains a best-effort workaround
+- Automatic stalled-reply recovery requires the side panel to remain open because its reply watcher owns the timeout
+- Active-page context is limited to normal HTTP(S) pages for which the user grants site access
 - Prompt box selectors may need updates if ChatGPT or Gemini changes their UI
 
 ## Files
 
 - `manifest.json` defines the Manifest V3 extension, permissions, target hosts, side panel, background worker, and content script.
-- `background.js` opens the side panel when the extension icon is clicked.
+- `background.js` opens the side panel, reconciles Council membership, and performs short tab activation and focus operations.
 - `sidepanel.html` provides the persistent side panel UI.
-- `sidepanel.js` handles the side panel transcript, unseen-turn batching, typed composer, latest-reply capture, handoffs, and roundtable orchestration.
+- `sidepanel.js` handles the transcript, unseen-turn batching, typed composer, expected-responder attention, stalled-chat recovery, page-context attachments, handoffs, and UI orchestration.
+- `orchestration.js` contains the deterministic, bounded Roundtable transaction strategy shared by the side panel, background worker, and tests.
 - `routing.js` contains the shared routing-tag parser used by the side panel and regression tests.
 - `content.js` captures the latest visible reply and inserts text into visible prompt boxes.
 
@@ -193,4 +213,10 @@ Run routing parser regressions with:
 
 ```bash
 node --test test/routing.test.js
+```
+
+Run Roundtable orchestration regressions with:
+
+```bash
+node --test test/orchestration.test.js
 ```

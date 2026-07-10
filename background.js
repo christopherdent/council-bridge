@@ -1,3 +1,5 @@
+importScripts("orchestration.js");
+
 const STORAGE_KEYS = {
   turns: "conversationTurns",
   session: "councilSession"
@@ -63,6 +65,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type === "RESTORE_TAB_AFTER_INJECTION") {
     restoreTabAfterInjection(message.tabId, message.windowId, message.lockId, message.previousWindowId)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Unknown error" });
+      });
+    return true;
+  }
+
+  if (message?.type === "PRIORITIZE_EXPECTED_RESPONDER") {
+    prioritizeExpectedResponder(message.tabId)
       .then(sendResponse)
       .catch((error) => {
         sendResponse({ ok: false, error: error?.message || "Unknown error" });
@@ -145,6 +156,36 @@ async function wakeTabForInjection(tabId) {
     releaseWindowInjectionLock(windowId, lockId);
     throw error;
   }
+}
+
+async function prioritizeExpectedResponder(tabId) {
+  if (!Number.isInteger(tabId)) {
+    return { ok: false, error: "Missing tabId" };
+  }
+
+  const targetTab = await chrome.tabs.get(tabId);
+  const targetWindow = await chrome.windows.get(targetTab.windowId);
+  const previousFocusedWindow = await chrome.windows.getLastFocused().catch(() => null);
+
+  if (targetWindow.state === "minimized") {
+    await chrome.windows.update(targetTab.windowId, { state: "normal" });
+  }
+
+  if (!targetTab.active) {
+    await chrome.tabs.update(tabId, { active: true });
+  }
+
+  if (!targetWindow.focused) {
+    await chrome.windows.update(targetTab.windowId, { focused: true });
+    await delay(120);
+
+    if (Number.isInteger(previousFocusedWindow?.id) && previousFocusedWindow.id !== targetTab.windowId) {
+      await chrome.windows.update(previousFocusedWindow.id, { focused: true }).catch(() => {});
+    }
+  }
+
+  console.info(`[CouncilBridge][EXPECTED_RESPONDER_PRIORITIZED] tabId=${tabId} windowId=${targetTab.windowId}`);
+  return { ok: true, tabId, windowId: targetTab.windowId };
 }
 
 async function restoreTabAfterInjection(tabId, windowId, lockId, previousWindowId) {
@@ -400,7 +441,8 @@ function normalizeCouncilSession(value) {
       gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
     },
     botToBot: normalizeBotToBotState(value?.botToBot),
-    roundtable: normalizeRoundtableState(value?.roundtable),
+    roundtable: CouncilBridgeOrchestration.normalizeRoundtableState(value?.roundtable),
+    recovery: normalizeRecoveryState(value?.recovery),
     members: {
       chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
       gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
@@ -408,33 +450,14 @@ function normalizeCouncilSession(value) {
   };
 }
 
-function normalizeRoundtableState(value) {
-  const nextFirst = ["gemini", "chatgpt"].includes(value?.nextFirst) ? value.nextFirst : "gemini";
+function normalizeRecoveryState(value) {
+  const timeoutMinutes = [5, 7, 10].includes(Number(value?.timeoutMinutes))
+    ? Number(value.timeoutMinutes)
+    : 7;
 
   return {
-    enabled: Boolean(value?.enabled),
-    nextFirst,
-    pending: normalizeRoundtablePending(value?.pending)
-  };
-}
-
-function normalizeRoundtablePending(value) {
-  if (!value?.id || value.status !== "waiting_first_reply") {
-    return null;
-  }
-
-  if (!["gemini", "chatgpt"].includes(value.firstAgent) || !["gemini", "chatgpt"].includes(value.secondAgent) || value.firstAgent === value.secondAgent) {
-    return null;
-  }
-
-  return {
-    id: value.id,
-    sourceTurnId: value.sourceTurnId || "",
-    firstAgent: value.firstAgent,
-    secondAgent: value.secondAgent,
-    createdAt: Number(value.createdAt) || Date.now(),
-    firstSentAt: Number(value.firstSentAt) || 0,
-    status: "waiting_first_reply"
+    enabled: value?.enabled !== false,
+    timeoutMinutes
   };
 }
 
@@ -719,4 +742,8 @@ function normalizeNickname(value) {
 function normalizeTimestamp(value) {
   const timestamp = Number(value);
   return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

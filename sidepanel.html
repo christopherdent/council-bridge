@@ -214,6 +214,33 @@
         margin: 0;
       }
 
+      .mode-row select,
+      .mode-row input[type="number"] {
+        min-width: 0;
+        margin-left: auto;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 4px 6px;
+        color: var(--text);
+        background: var(--bg);
+        font: inherit;
+      }
+
+      .mode-row input[type="number"] {
+        width: 54px;
+        height: auto;
+      }
+
+      .mode-row.submode {
+        padding-left: 22px;
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .mode-row.submode:has(input:disabled) {
+        opacity: 0.55;
+      }
+
       .session-summary {
         margin: 0;
         color: var(--muted);
@@ -444,9 +471,58 @@
         line-height: 1.4;
       }
 
+      .turn-context {
+        margin: 0;
+        overflow: hidden;
+        color: var(--muted);
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       .composer {
         display: grid;
         gap: 6px;
+      }
+
+      .composer-tools {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+
+      .page-attachment {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        max-width: 100%;
+        gap: 5px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 4px 6px;
+        color: var(--muted);
+        background: var(--panel);
+        font-size: 11px;
+      }
+
+      .page-attachment[hidden] {
+        display: none;
+      }
+
+      .page-attachment-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .page-attachment button {
+        flex: 0 0 auto;
+        width: 22px;
+        height: 22px;
+        padding: 0;
+        line-height: 1;
       }
 
       textarea {
@@ -502,6 +578,20 @@
               <input id="roundtableMode" type="checkbox">
               <span>Roundtable mode</span>
             </label>
+            <label class="mode-row submode">
+              <input id="roundtableAutonomous" type="checkbox">
+              <span>Have at it</span>
+              <input id="roundtableTurnLimit" type="number" min="2" max="10" step="1" value="6" aria-label="Autonomous roundtable turn limit">
+            </label>
+            <label class="mode-row">
+              <input id="autoRecovery" type="checkbox">
+              <span>Recover stalled replies</span>
+              <select id="recoveryTimeout" aria-label="Stalled reply timeout">
+                <option value="5">5 min</option>
+                <option value="7">7 min</option>
+                <option value="10">10 min</option>
+              </select>
+            </label>
             <div class="session-actions">
               <button id="setActiveAsChatGPT" type="button" title="Assign the active tab as ChatGPT">Set GPT</button>
               <button id="setActiveAsGemini" type="button" title="Assign the active tab as Gemini">Set Gem</button>
@@ -528,6 +618,13 @@
       <section id="turns" class="turns" aria-label="Conversation"></section>
 
       <section class="composer" aria-label="Composer">
+        <div class="composer-tools">
+          <button id="attachPageContext" class="icon-button" type="button" title="Attach context from the active non-chat page" aria-label="Attach current page context">&#128206;</button>
+          <div id="pageContextAttachment" class="page-attachment" hidden>
+            <span id="pageContextTitle" class="page-attachment-title"></span>
+            <button id="removePageContext" type="button" title="Remove page context" aria-label="Remove page context">&times;</button>
+          </div>
+        </div>
         <textarea id="composerText" placeholder="Write as User..."></textarea>
         <div class="send-row">
           <button id="sendComposer" class="primary" type="button">Send</button>
@@ -535,6 +632,7 @@
       </section>
     </main>
     <script src="routing.js"></script>
+    <script src="orchestration.js"></script>
     <script src="sidepanel.js"></script>
   </body>
 </html>

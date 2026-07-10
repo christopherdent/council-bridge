@@ -2,13 +2,17 @@
   "manifest_version": 3,
   "name": "Council Bridge",
   "version": "0.1.0",
-  "description": "A manual browser UI bridge for moving selected text between ChatGPT and Gemini tabs.",
+  "description": "A browser side panel for coordinating assigned ChatGPT and Gemini conversations.",
   "permissions": [
     "activeTab",
     "scripting",
     "tabs",
     "storage",
     "sidePanel"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
   ],
   "host_permissions": [
     "https://chatgpt.com/*",
