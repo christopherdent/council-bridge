@@ -10,7 +10,7 @@ const MAX_TURNS = 80;
 const REPLY_WATCH_INTERVAL_MS = 500;
 const REPLY_WATCH_STABLE_MS = 2000;
 const STREAM_CONFIRMED_STABLE_MS = 1200;
-const INACTIVE_REPLY_WATCH_STABLE_MS = 15000;
+const INACTIVE_REPLY_SETTLE_MS = 15000;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
@@ -500,6 +500,7 @@ function startReplyWatcher(target, baselineText) {
     candidateText: "",
     candidateSince: 0,
     candidateConfirmedNotStreaming: false,
+    lastCommittedSignature: "",
     startedAt: Date.now(),
     timeoutId: null
   };
@@ -527,7 +528,7 @@ function startReplyWatcher(target, baselineText) {
         signature &&
         signature !== watcher.baselineSignature
       ) {
-        if (duplicate) {
+        if (duplicate && signature !== watcher.lastCommittedSignature) {
           stopReplyWatcher(target.label);
           return;
         }
@@ -542,22 +543,39 @@ function startReplyWatcher(target, baselineText) {
             watcher.candidateConfirmedNotStreaming = true;
           }
 
-          const requiredStableMs = !isActive
-            ? INACTIVE_REPLY_WATCH_STABLE_MS
-            : watcher.candidateConfirmedNotStreaming
-              ? STREAM_CONFIRMED_STABLE_MS
-              : REPLY_WATCH_STABLE_MS;
+          const requiredStableMs = watcher.candidateConfirmedNotStreaming
+            ? STREAM_CONFIRMED_STABLE_MS
+            : REPLY_WATCH_STABLE_MS;
 
-          if (Date.now() - watcher.candidateSince >= requiredStableMs) {
+          if (
+            signature !== watcher.lastCommittedSignature &&
+            Date.now() - watcher.candidateSince >= requiredStableMs
+          ) {
             const committed = await commitWatcherReply(target, watcher.candidateText);
 
             if (committed) {
-              stopReplyWatcher(target.label);
-              setStatus(`Captured completed ${target.label} reply.`);
-              return;
+              watcher.lastCommittedSignature = signature;
+              setStatus(isActive
+                ? `Captured completed ${target.label} reply.`
+                : `Captured ${target.label} reply; watching for more.`);
+
+              if (isActive) {
+                stopReplyWatcher(target.label);
+                return;
+              }
             }
 
             watcher.candidateSince = Date.now();
+          }
+
+          if (
+            !isActive &&
+            watcher.lastCommittedSignature === signature &&
+            watcher.candidateConfirmedNotStreaming &&
+            Date.now() - watcher.candidateSince >= INACTIVE_REPLY_SETTLE_MS
+          ) {
+            stopReplyWatcher(target.label);
+            return;
           }
         }
       }
