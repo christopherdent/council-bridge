@@ -59,7 +59,7 @@ Use these tags to explicitly send to both:
 @council Review this together.
 ```
 
-Routing tags can appear anywhere in the message. A single member tag routes only to that member. Multiple member tags or an explicit both-tag route to both. Tags are not stripped; they stay in the stored and sent message text.
+Routing tags can appear anywhere in the message and are case-insensitive. A single member tag routes only to that member. Multiple member tags or an explicit both-tag route to both. Tags are not stripped; they stay in the stored and sent message text. Recipient metadata remains attached to the stored turn, so a send that was already queued for the other agent cannot pick up a later single-agent message.
 
 ### Nicknames
 

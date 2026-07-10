@@ -205,7 +205,8 @@ async function passSelectionToOtherAi() {
     await appendTurn({
       speaker: source.label,
       text: selectedText,
-      target: getAgentName(target)
+      target: getAgentName(target),
+      recipients: [target.key]
     });
     await sendToTarget(target);
   } catch (error) {
@@ -315,7 +316,8 @@ async function sendComposerToTarget(target, text) {
     await appendTurn({
       speaker: "Christopher",
       text,
-      target: getAgentName(target)
+      target: getAgentName(target),
+      recipients: [target.key]
     }, {
       allowDuplicate: true
     });
@@ -339,7 +341,8 @@ async function sendComposerToBoth(text) {
     await appendTurn({
       speaker: "Christopher",
       text,
-      target: `${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`
+      target: `${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`,
+      recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key]
     }, {
       allowDuplicate: true
     });
@@ -544,7 +547,8 @@ async function appendTurn(turn, options = {}) {
       createdAt,
       speaker: turn.speaker,
       text: turn.text,
-      target: turn.target
+      target: turn.target,
+      recipients: Array.isArray(turn.recipients) ? turn.recipients : undefined
     }
   ].slice(-MAX_TURNS);
 
@@ -689,8 +693,24 @@ function getUnseenTurnsForTarget(target) {
   const lastAdvisedAt = deliveryState[target.label] || 0;
 
   return turns.filter((turn) => {
-    return turn.createdAt > lastAdvisedAt && turn.speaker !== target.label;
+    return (
+      turn.createdAt > lastAdvisedAt &&
+      turn.speaker !== target.label &&
+      isTurnRoutedToTarget(turn, target)
+    );
   });
+}
+
+function isTurnRoutedToTarget(turn, target) {
+  if (Array.isArray(turn.recipients) && turn.recipients.length > 0) {
+    return turn.recipients.includes(target.key);
+  }
+
+  if (turn.speaker === "Christopher") {
+    return parseComposerRoute(turn.text).targets.some((recipient) => recipient.key === target.key);
+  }
+
+  return true;
 }
 
 function hasTargetBeenAdvised(target) {
