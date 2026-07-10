@@ -91,6 +91,7 @@ const approveHandoffButton = document.getElementById("approveHandoff");
 const rejectHandoffButton = document.getElementById("rejectHandoff");
 const approveOneHandoffButton = document.getElementById("approveOneHandoff");
 const approveThreeHandoffsButton = document.getElementById("approveThreeHandoffs");
+const approveTenHandoffsButton = document.getElementById("approveTenHandoffs");
 
 let turns = [];
 let deliveryState = {
@@ -129,6 +130,7 @@ approveHandoffButton.addEventListener("click", () => approvePendingHandoff(0));
 rejectHandoffButton.addEventListener("click", rejectPendingHandoff);
 approveOneHandoffButton.addEventListener("click", () => approvePendingHandoff(1));
 approveThreeHandoffsButton.addEventListener("click", () => approvePendingHandoff(3));
+approveTenHandoffsButton.addEventListener("click", () => approvePendingHandoff(10));
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") {
@@ -1335,7 +1337,7 @@ function renderHandoffPanel() {
 }
 
 function setHandoffApprovalButtonsEnabled(enabled, reason) {
-  for (const button of [approveHandoffButton, approveOneHandoffButton, approveThreeHandoffsButton]) {
+  for (const button of [approveHandoffButton, approveOneHandoffButton, approveThreeHandoffsButton, approveTenHandoffsButton]) {
     button.disabled = !enabled;
     button.title = enabled ? "" : reason;
   }
@@ -1533,6 +1535,7 @@ async function approvePendingHandoff(turnBudget = null) {
       ...councilSession,
       botToBot: {
         ...councilSession.botToBot,
+        maxTurns: Math.max(councilSession.botToBot.maxTurns, turnBudget),
         approvedTurnsRemaining: Math.max(councilSession.botToBot.approvedTurnsRemaining, turnBudget)
       }
     };
@@ -1991,7 +1994,7 @@ async function insertPromptInTab(tabId, text, options) {
       }
 
       const restoreTargetId = wakeResponse.previousTabId ?? tabId;
-      await restoreTabAfterInjection(restoreTargetId, wakeResponse.windowId, wakeResponse.lockId);
+      await restoreTabAfterInjection(restoreTargetId, wakeResponse.windowId, wakeResponse.lockId, wakeResponse.previousWindowId);
     }
   }
 }
@@ -2009,12 +2012,13 @@ async function wakeTabForInjection(tabId) {
   return response;
 }
 
-async function restoreTabAfterInjection(tabId, windowId, lockId) {
+async function restoreTabAfterInjection(tabId, windowId, lockId, previousWindowId) {
   const response = await chrome.runtime.sendMessage({
     type: "RESTORE_TAB_AFTER_INJECTION",
     tabId,
     windowId,
-    lockId
+    lockId,
+    previousWindowId
   });
 
   if (response?.ok === false) {

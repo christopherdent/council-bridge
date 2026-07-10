@@ -1,5 +1,6 @@
 var AUTO_REPLY_STABLE_MS = 2000;
 var AUTO_REPLY_MIN_LENGTH = 20;
+var SUBMIT_CONFIRM_TIMEOUT_MS = 5000;
 
 var autoReplyTimer = null;
 var lastObservedReplySignature = "";
@@ -291,8 +292,9 @@ async function submitPrompt(promptBox) {
     return false;
   }
 
+  const promptTextBeforeSubmit = getPromptText(promptBox);
   button.click();
-  return true;
+  return waitForSubmitAccepted(promptBox, promptTextBeforeSubmit);
 }
 
 function waitForSendButton(promptBox) {
@@ -350,6 +352,55 @@ function findSendButton(promptBox) {
 
     return /\bsend\b/i.test(getButtonLabel(button));
   }) || null;
+}
+
+function waitForSubmitAccepted(promptBox, promptTextBeforeSubmit) {
+  const intervalMs = 100;
+  const startedAt = Date.now();
+
+  return new Promise((resolve) => {
+    const intervalId = setInterval(() => {
+      if (isReplyStillStreaming()) {
+        done(true);
+        return;
+      }
+
+      const currentPromptText = getPromptText(promptBox);
+
+      if (!currentPromptText || currentPromptText !== promptTextBeforeSubmit) {
+        done(true);
+        return;
+      }
+
+      const button = findSendButton(promptBox);
+
+      if (!button) {
+        done(true);
+        return;
+      }
+
+      if (Date.now() - startedAt >= SUBMIT_CONFIRM_TIMEOUT_MS) {
+        done(false);
+      }
+    }, intervalMs);
+
+    function done(value) {
+      clearInterval(intervalId);
+      resolve(value);
+    }
+  });
+}
+
+function getPromptText(promptBox) {
+  if (!promptBox) {
+    return "";
+  }
+
+  if ("value" in promptBox) {
+    return String(promptBox.value || "").trim();
+  }
+
+  return String(promptBox.innerText || promptBox.textContent || "").trim();
 }
 
 function findNearbySendButton(promptBox) {

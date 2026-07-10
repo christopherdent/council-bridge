@@ -110,8 +110,9 @@ The first valid tag for the other council member creates a pending handoff. `@bo
 - `Reject handoff`
 - `Approve next 1 turn`
 - `Approve next 3 turns`
+- `Approve next 10 turns`
 
-`Approve handoff` sends only the current pending handoff. `Approve next 1 turn` and `Approve next 3 turns` grant a short bot-to-bot budget so the next tagged assistant replies can continue automatically until the budget or safety limit is reached.
+`Approve handoff` sends only the current pending handoff. `Approve next 1 turn`, `Approve next 3 turns`, and `Approve next 10 turns` grant a bot-to-bot budget so the next tagged assistant replies can continue automatically until the budget or safety limit is reached.
 
 The approval actions remain disabled while the destination agent is responding, disconnected, stale, already has a queued send, or has no new handoff context. The panel checks readiness continuously and enables and flashes the approval action only when the handoff can be sent. Reject remains available whenever a handoff is pending.
 

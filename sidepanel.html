@@ -217,7 +217,10 @@
       }
 
       .handoff-panel.visible.ready {
-        animation: handoff-panel-pulse 1200ms ease-in-out infinite;
+        border-color: #f59e0b;
+        border-left-color: #ef4444;
+        background: #fff7ed;
+        animation: handoff-panel-pulse 700ms ease-in-out infinite;
       }
 
       .handoff-notice {
@@ -239,20 +242,20 @@
       }
 
       .handoff-panel.visible.ready #approveHandoff:not(:disabled) {
-        border-color: var(--christopher);
+        border-color: #dc2626;
         color: #ffffff;
-        background: var(--christopher);
-        animation: approve-handoff-flash 850ms ease-in-out infinite;
+        background: #dc2626;
+        animation: approve-handoff-flash 520ms ease-in-out infinite;
       }
 
       @keyframes handoff-panel-pulse {
         0%,
         100% {
-          box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.18);
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35);
         }
 
         50% {
-          box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18);
+          box-shadow: 0 0 0 5px rgba(239, 68, 68, 0.28);
         }
       }
 
@@ -260,10 +263,12 @@
         0%,
         100% {
           filter: brightness(1);
+          transform: scale(1);
         }
 
         50% {
-          filter: brightness(1.28);
+          filter: brightness(1.45);
+          transform: scale(1.04);
         }
       }
 
@@ -485,6 +490,7 @@
             <button id="rejectHandoff" type="button">Reject handoff</button>
             <button id="approveOneHandoff" type="button">Approve next 1 turn</button>
             <button id="approveThreeHandoffs" type="button">Approve next 3 turns</button>
+            <button id="approveTenHandoffs" type="button">Approve next 10 turns</button>
           </div>
         </section>
         <p id="status" class="status" role="status" aria-live="polite"></p>

@@ -62,7 +62,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "RESTORE_TAB_AFTER_INJECTION") {
-    restoreTabAfterInjection(message.tabId, message.windowId, message.lockId)
+    restoreTabAfterInjection(message.tabId, message.windowId, message.lockId, message.previousWindowId)
       .then(sendResponse)
       .catch((error) => {
         sendResponse({ ok: false, error: error?.message || "Unknown error" });
@@ -97,8 +97,10 @@ async function wakeTabForInjection(tabId) {
   }
 
   const targetTab = await chrome.tabs.get(tabId);
+  const targetWindow = await chrome.windows.get(targetTab.windowId);
+  const previousFocusedWindow = await chrome.windows.getLastFocused().catch(() => null);
 
-  if (targetTab.active) {
+  if (targetTab.active && targetWindow.focused && targetWindow.state !== "minimized") {
     return { ok: true, activated: false };
   }
 
@@ -118,14 +120,24 @@ async function wakeTabForInjection(tabId) {
       windowId
     });
 
-    await chrome.tabs.update(tabId, { active: true });
+    if (targetWindow.state === "minimized") {
+      await chrome.windows.update(windowId, { state: "normal" });
+    }
+
+    await chrome.windows.update(windowId, { focused: true });
+
+    if (!targetTab.active) {
+      await chrome.tabs.update(tabId, { active: true });
+    }
+
     await waitForTabReady(tabId);
-    console.info(`[CouncilBridge][TAB_WOKEN_FOR_INJECTION] tabId=${tabId} previousTabId=${previousActiveTab?.id || ""}`);
+    console.info(`[CouncilBridge][TAB_WOKEN_FOR_INJECTION] tabId=${tabId} previousTabId=${previousActiveTab?.id || ""} previousWindowId=${previousFocusedWindow?.id || ""}`);
 
     return {
       ok: true,
       activated: true,
       previousTabId: previousActiveTab?.id,
+      previousWindowId: previousFocusedWindow?.id,
       windowId,
       lockId
     };
@@ -135,16 +147,32 @@ async function wakeTabForInjection(tabId) {
   }
 }
 
-async function restoreTabAfterInjection(tabId, windowId, lockId) {
+async function restoreTabAfterInjection(tabId, windowId, lockId, previousWindowId) {
   try {
-    if (!Number.isInteger(tabId)) {
-      return { ok: false, error: "Missing tabId" };
+    let restoredWindowId = previousWindowId;
+
+    if (Number.isInteger(tabId)) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        await chrome.tabs.update(tabId, { active: true });
+        restoredWindowId = tab.windowId;
+        console.info(`[CouncilBridge][TAB_RESTORED_AFTER_INJECTION] tabId=${tabId}`);
+      } catch (error) {
+        console.warn(`[CouncilBridge][TAB_RESTORE_SKIPPED] tabId=${tabId} error=${error?.message || "Unknown error"}`);
+      }
     }
 
-    const tab = await chrome.tabs.get(tabId);
-    await chrome.tabs.update(tabId, { active: true });
-    console.info(`[CouncilBridge][TAB_RESTORED_AFTER_INJECTION] tabId=${tabId}`);
-    return { ok: true, windowId: tab.windowId };
+    if (Number.isInteger(previousWindowId)) {
+      try {
+        await chrome.windows.update(previousWindowId, { focused: true });
+        restoredWindowId = previousWindowId;
+        console.info(`[CouncilBridge][WINDOW_RESTORED_AFTER_INJECTION] windowId=${previousWindowId}`);
+      } catch (error) {
+        console.warn(`[CouncilBridge][WINDOW_RESTORE_SKIPPED] windowId=${previousWindowId} error=${error?.message || "Unknown error"}`);
+      }
+    }
+
+    return { ok: true, windowId: restoredWindowId };
   } catch (error) {
     return { ok: false, error: error?.message || "Unknown error" };
   } finally {
