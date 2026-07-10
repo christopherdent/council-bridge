@@ -329,7 +329,7 @@ function parseComposerRoute(rawText) {
   }
 
   return {
-    text: targets.size > 0 ? remainingText.trim() : rawText.trim(),
+    text: rawText.trim(),
     targets: targets.size > 0 ? Array.from(targets) : [TARGETS.gemini, TARGETS.chatgpt]
   };
 }

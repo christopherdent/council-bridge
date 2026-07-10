@@ -15,25 +15,73 @@ It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 
 ## Use the Extension
 
-1. Open ChatGPT and Gemini
-2. Click the extension icon to open the side panel
-3. Open the ChatGPT tab you want in the council and click Set as Lobo
-4. Open the Gemini tab you want in the council and click Set as Gemini
-5. Highlight a response in a council tab
-6. Click Pass selection to other AI
-7. Council Bridge captures the selected text, inserts the wrapped prompt into the other registered council tab, and clicks send
+Council Bridge only works with the exact ChatGPT and Gemini conversations you assign to the active council. Random ChatGPT or Gemini tabs are ignored.
 
-Only explicitly assigned council conversations are captured or used as send targets. Other ChatGPT or Gemini tabs are ignored. Council membership is anchored to the conversation ID in the URL (`chatgpt.com/c/...` or `gemini.google.com/app/...`), while the current tab ID is treated as a recoverable routing address. If Chrome reloads or reopens the same council conversation with a new tab ID, Council Bridge auto-heals the route. If an assigned tab navigates to another conversation URL, the member is marked stale until you switch back or explicitly reassign it.
+### Start a Council
 
-Use Add selection to add highlighted ChatGPT or Gemini text to the side panel without passing it to the other AI.
+1. Open the ChatGPT conversation you want to use as Lobo.
+2. Open the Gemini conversation you want to use as Gemini.
+3. Click the Council Bridge extension icon to open the side panel.
+4. While the ChatGPT conversation is the active browser tab, click `Set as Lobo`.
+5. While the Gemini conversation is the active browser tab, click `Set as Gemini`.
+6. Confirm the side panel shows both members as connected.
 
-Use Refresh replies to pull the latest visible ChatGPT and Gemini replies into the side panel conversation view.
+Council membership is anchored to the conversation ID in the URL:
 
-Completed ChatGPT and Gemini replies are also added automatically after their visible response text stops changing.
+- ChatGPT: `chatgpt.com/c/...`
+- Gemini: `gemini.google.com/app/...`
 
-Use Pause capture if an unrelated tab or conversation should not be collected while you inspect it.
+The current tab ID is only a routing address. If Chrome reloads or reopens the same council conversation with a new tab ID, Council Bridge auto-heals the route. If an assigned tab navigates to a different conversation URL, that member is marked stale until you switch back or explicitly reassign it.
 
-Typed messages in the side panel use one Send button. By default, Council Bridge sends to both agents. Add a leading `@gemini`, `@gem`, `@lobo`, `@chatgpt`, or `@gpt` tag to route only to that agent. Use `@both`, `@all`, or `@council` to explicitly route to both. Council Bridge strips recognized leading routing tags before storing and sending the message, and sends every transcript turn that target has not seen since it was last advised.
+### Send a Message
+
+Type in the side panel composer and click `Send`.
+
+Default behavior sends to both Lobo and Gemini. Use a leading routing tag to send to one agent:
+
+```text
+@gemini What do you think?
+@gem Same thing, shorter tag.
+@lobo Turn this into implementation steps.
+@chatgpt Same as @lobo.
+@gpt Same as @lobo.
+```
+
+Use these tags to explicitly send to both:
+
+```text
+@both Review this together.
+@all Review this together.
+@council Review this together.
+```
+
+Routing tags must be at the start of the message. Tags are not stripped; they stay in the stored and sent message text.
+
+When Council Bridge sends to an agent, it includes every transcript turn that agent has not seen since it was last advised. It does not resend the whole transcript every time.
+
+### Capture Replies
+
+Completed ChatGPT and Gemini replies are added automatically after their visible response text stops changing.
+
+Use `Refresh replies` to manually pull the latest visible reply from both registered council agents. It refreshes Lobo and Gemini, not random tabs.
+
+Use `Add selection` to add highlighted text from the active council tab to the side panel without sending it anywhere.
+
+Use `Pass selected reply to other AI` to capture highlighted text from the active council tab and send it to the other registered council agent.
+
+### Pause and Reset
+
+Use `Pause capture` if you want to inspect an unrelated tab or conversation without collecting new AI replies. While paused, automatic reply capture and manual reply refresh do not add turns.
+
+Use `Remove tab` while a council tab is active to remove that member from the current council session.
+
+Use `Clear` to clear the side panel transcript and delivery cursors. This does not clear the real ChatGPT or Gemini conversations.
+
+### Timestamps and Transcript
+
+Every side panel turn shows a millisecond timestamp. Prompt payloads sent to Lobo or Gemini include those timestamps too, so test runs can be traced precisely.
+
+The side panel transcript stores only text Council Bridge captures, refreshes, or sends. It does not scrape full conversations.
 
 The Gemini-to-ChatGPT wrapped prompt uses this format:
 
