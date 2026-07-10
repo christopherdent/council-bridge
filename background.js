@@ -4,6 +4,7 @@ const STORAGE_KEYS = {
 };
 
 const MAX_TURNS = 80;
+const PENDING_CONVERSATION_PREFIX = "pending";
 const TARGETS = {
   chatgpt: {
     label: "ChatGPT",
@@ -406,6 +407,31 @@ function reconcileCouncilTabInSession(session, tab) {
 
     const conversationId = extractConversationId(tab.url, key);
 
+    if (isPendingConversationId(member.conversationId) && member.currentTabId === tab.id && member.currentWindowId === tab.windowId) {
+      const nextMember = {
+        ...member,
+        conversationId: conversationId || member.conversationId,
+        currentTabId: tab.id,
+        currentWindowId: tab.windowId,
+        url: tab.url,
+        status: "connected"
+      };
+
+      if (
+        nextMember.conversationId !== member.conversationId ||
+        nextMember.url !== member.url ||
+        member.status !== "connected"
+      ) {
+        nextMembers[key] = nextMember;
+        changed = true;
+        console.info(conversationId
+          ? `[CouncilBridge][PENDING_CONVERSATION_PROMOTED] role=${key} conversationId=${conversationId}`
+          : `[CouncilBridge][PENDING_CONVERSATION_ACTIVE] role=${key} tabId=${tab.id}`);
+      }
+
+      continue;
+    }
+
     if (conversationId === member.conversationId) {
       if (
         member.currentTabId !== tab.id ||
@@ -460,6 +486,10 @@ function extractConversationId(url, key) {
   } catch (error) {
     return "";
   }
+}
+
+function isPendingConversationId(value) {
+  return String(value || "").startsWith(`${PENDING_CONVERSATION_PREFIX}:`);
 }
 
 function isDuplicateTurn(turns, speaker, text) {

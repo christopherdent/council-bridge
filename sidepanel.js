@@ -13,6 +13,7 @@ const STREAM_CONFIRMED_STABLE_MS = 1200;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
+const PENDING_CONVERSATION_PREFIX = "pending";
 
 const TARGETS = {
   gemini: {
@@ -23,12 +24,12 @@ const TARGETS = {
     defaultNickname: "Gemini",
     defaultSourceLabel: "ChatGPT",
     instruction: "Gemini, please respond to Christopher and ChatGPT with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.",
-    wrapTurns: (turnsToSend) => {
+    wrapTurns: (turnsToSend, options = {}) => {
       const targetName = getAgentName(TARGETS.gemini);
       const chatgptName = getAgentName(TARGETS.chatgpt);
 
       return `[Council Bridge]
-Sources: ${formatSourceList(turnsToSend)}
+${options.includeCouncilOverview ? `${formatCouncilOverview(targetName)}\n\n` : ""}Sources: ${formatSourceList(turnsToSend)}
 Target: ${targetName}
 
 The following turns happened since ${targetName} was last advised.
@@ -46,12 +47,12 @@ ${targetName}, please respond to Christopher and ${chatgptName} with an independ
     defaultNickname: "ChatGPT",
     defaultSourceLabel: "Gemini",
     instruction: "ChatGPT, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.",
-    wrapTurns: (turnsToSend) => {
+    wrapTurns: (turnsToSend, options = {}) => {
       const targetName = getAgentName(TARGETS.chatgpt);
       const geminiName = getAgentName(TARGETS.gemini);
 
       return `[Council Bridge]
-Sources: ${formatSourceList(turnsToSend)}
+${options.includeCouncilOverview ? `${formatCouncilOverview(targetName)}\n\n` : ""}Sources: ${formatSourceList(turnsToSend)}
 Target: ${targetName}
 
 The following turns happened since ${targetName} was last advised.
@@ -410,7 +411,9 @@ async function sendToTarget(target) {
   await waitForTabReady(tab.id);
 
   const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
-  const prompt = target.wrapTurns(turnsToSend);
+  const prompt = target.wrapTurns(turnsToSend, {
+    includeCouncilOverview: !hasTargetBeenAdvised(target)
+  });
   let response = await insertPromptInTab(tab.id, prompt, {
     showAlerts: false,
     submit: true
@@ -593,6 +596,10 @@ function getUnseenTurnsForTarget(target) {
   });
 }
 
+function hasTargetBeenAdvised(target) {
+  return (deliveryState[target.label] || 0) > 0;
+}
+
 async function markTargetAdvised(target, turnsToSend) {
   const newestTurnAt = Math.max(...turnsToSend.map((turn) => turn.createdAt));
   deliveryState = {
@@ -629,6 +636,19 @@ function formatTurnCount(count) {
 function formatSourceList(turnsToSend) {
   const sourceLabels = Array.from(new Set(turnsToSend.map((turn) => getPromptSpeaker(turn.speaker).source)));
   return sourceLabels.join(", ");
+}
+
+function formatCouncilOverview(targetName) {
+  const chatgptName = getAgentName(TARGETS.chatgpt);
+  const geminiName = getAgentName(TARGETS.gemini);
+
+  return `Council overview: Council Bridge is Christopher's browser side panel for coordinating ${chatgptName} and ${geminiName}. Project README: https://github.com/christopherdent/council-bridge/blob/main/README.md
+
+Christopher writes or captures turns, then Council Bridge forwards the new turns to the other council member.
+
+Routing notes: leading tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Treat them as conversation context, not as a claim that you cannot participate.
+
+Context note for ${targetName}: this may be a fresh browser conversation. Search or use any conversation history available to you for relevant context, then continue from the included turns.`;
 }
 
 function formatTurnsForPrompt(turnsToSend) {
@@ -882,12 +902,14 @@ async function setActiveTabAsCouncilMember(target) {
     return;
   }
 
-  const conversationId = extractConversationId(activeTab.url, target.key);
-
-  if (!conversationId) {
-    setStatus(`${target.label} needs an active conversation URL before it can join the council.`);
-    return;
-  }
+  const previousMember = councilSession.members[target.key];
+  const existingPendingConversationId = (
+    isPendingConversationId(previousMember?.conversationId) &&
+    previousMember.currentTabId === activeTab.id &&
+    previousMember.currentWindowId === activeTab.windowId
+  ) ? previousMember.conversationId : "";
+  const conversationId = extractConversationId(activeTab.url, target.key) || existingPendingConversationId || createPendingConversationId(target.key);
+  const resetDeliveryCursor = previousMember?.conversationId !== conversationId;
 
   councilSession = {
     ...councilSession,
@@ -907,8 +929,16 @@ async function setActiveTabAsCouncilMember(target) {
     }
   };
 
+  if (resetDeliveryCursor) {
+    deliveryState = {
+      ...deliveryState,
+      [target.label]: 0
+    };
+    await chrome.storage.local.set({ [STORAGE_KEYS.deliveryState]: deliveryState });
+  }
+
   await saveCouncilSession();
-  setStatus(`Set this tab as ${getAgentName(target)}.`);
+  setStatus(`Set this tab as ${getAgentName(target)}${isPendingConversationId(conversationId) ? " with a pending conversation ID." : "."}`);
 }
 
 async function removeActiveTabFromCouncil() {
@@ -1315,8 +1345,9 @@ async function getCouncilTabForTarget(target) {
   try {
     if (member.status !== "stale" && Number.isInteger(member.currentTabId)) {
       const tab = await chrome.tabs.get(member.currentTabId);
+      const promotedMember = await promotePendingConversationIfReady(target, member, tab);
 
-      if (tabMatchesCouncilMember(tab, member, target)) {
+      if (tabMatchesCouncilMember(tab, promotedMember, target)) {
         return tab;
       }
 
@@ -1329,8 +1360,53 @@ async function getCouncilTabForTarget(target) {
   return healCouncilMemberFromOpenTabs(target, member);
 }
 
+async function promotePendingConversationIfReady(target, member, tab) {
+  const conversationId = extractConversationId(tab?.url || "", target.key);
+
+  if (
+    !isPendingConversationId(member?.conversationId) ||
+    !conversationId ||
+    tab.id !== member.currentTabId ||
+    tab.windowId !== member.currentWindowId
+  ) {
+    return member;
+  }
+
+  const promotedMember = {
+    ...member,
+    conversationId,
+    currentTabId: tab.id,
+    currentWindowId: tab.windowId,
+    url: tab.url,
+    status: "connected"
+  };
+
+  councilSession = {
+    ...councilSession,
+    members: {
+      ...councilSession.members,
+      [target.key]: promotedMember
+    }
+  };
+  await saveCouncilSession();
+  console.info(`[CouncilBridge][PENDING_CONVERSATION_PROMOTED] role=${target.key} conversationId=${conversationId}`);
+
+  return promotedMember;
+}
+
 function tabMatchesCouncilMember(tab, member, target, options = {}) {
   const conversationId = extractConversationId(tab?.url || "", target.key);
+
+  if (isPendingConversationId(member?.conversationId)) {
+    return (
+      Boolean(tab?.id) &&
+      Boolean(member) &&
+      (options.allowStale || member.status !== "stale") &&
+      tab.url?.startsWith(target.openUrl) &&
+      tab.id === member.currentTabId &&
+      tab.windowId === member.currentWindowId
+    );
+  }
 
   return (
     Boolean(tab?.id) &&
@@ -1423,9 +1499,22 @@ function extractConversationId(url, key) {
   }
 }
 
+function createPendingConversationId(key) {
+  const randomPart = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${PENDING_CONVERSATION_PREFIX}:${key}:${randomPart}`;
+}
+
+function isPendingConversationId(value) {
+  return String(value || "").startsWith(`${PENDING_CONVERSATION_PREFIX}:`);
+}
+
 function shortenId(value) {
   if (!value) {
     return "no conversation";
+  }
+
+  if (isPendingConversationId(value)) {
+    return "pending";
   }
 
   return value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;

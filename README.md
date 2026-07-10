@@ -26,10 +26,12 @@ Council Bridge only works with the exact ChatGPT and Gemini conversations you as
 5. While the Gemini conversation is the active browser tab, click `Set as Gemini`.
 6. Confirm the side panel shows both members as connected.
 
-Council membership is anchored to the conversation ID in the URL:
+Council membership is anchored to the conversation ID in the URL when one exists:
 
 - ChatGPT: `chatgpt.com/c/...`
 - Gemini: `gemini.google.com/app/...`
+
+Brand-new ChatGPT or Gemini conversations can be assigned before the service creates a real conversation ID. Council Bridge stores a temporary pending ID pinned to that exact tab, then promotes the council member automatically when the tab URL changes to the real conversation URL.
 
 The current tab ID is only a routing address. If Chrome reloads or reopens the same council conversation with a new tab ID, Council Bridge auto-heals the route. If an assigned tab navigates to a different conversation URL, that member is marked stale until you switch back or explicitly reassign it.
 
@@ -68,6 +70,8 @@ Nicknames can also be used as leading route tags. For example, if ChatGPT is nic
 - Both: `@both`, `@all`, `@council`
 
 When Council Bridge sends to an agent, it includes every transcript turn that agent has not seen since it was last advised. It does not resend the whole transcript every time.
+
+The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The overview explains that leading `@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and asks the agent to use any history available to it for context.
 
 ### Bot-to-Bot Handoffs
 
