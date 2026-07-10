@@ -10,6 +10,7 @@ const MAX_TURNS = 80;
 const REPLY_WATCH_INTERVAL_MS = 500;
 const REPLY_WATCH_STABLE_MS = 2000;
 const STREAM_CONFIRMED_STABLE_MS = 1200;
+const INACTIVE_REPLY_WATCH_STABLE_MS = 15000;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
@@ -112,6 +113,7 @@ setActiveAsGeminiButton.addEventListener("click", () => setActiveTabAsCouncilMem
 removeActiveFromCouncilButton.addEventListener("click", removeActiveTabFromCouncil);
 toggleCapturePauseButton.addEventListener("click", toggleCapturePause);
 composerTextEl.addEventListener("input", saveDraft);
+composerTextEl.addEventListener("keydown", handleComposerKeydown);
 chatgptNicknameEl.addEventListener("change", () => saveNickname(TARGETS.chatgpt, chatgptNicknameEl.value));
 geminiNicknameEl.addEventListener("change", () => saveNickname(TARGETS.gemini, geminiNicknameEl.value));
 approveHandoffButton.addEventListener("click", () => approvePendingHandoff(0));
@@ -128,12 +130,16 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     return;
   }
 
-  let addedTurns = [];
+  let changedTurns = [];
 
   if (changes[STORAGE_KEYS.turns]) {
     const previousTurns = changes[STORAGE_KEYS.turns].oldValue || [];
     turns = changes[STORAGE_KEYS.turns].newValue || [];
-    addedTurns = getAddedTurns(previousTurns, turns);
+    const addedTurns = getAddedTurns(previousTurns, turns);
+    changedTurns = [
+      ...addedTurns,
+      ...getUpdatedTurns(previousTurns, turns)
+    ];
     prepareTypewriterForAddedTurns(addedTurns);
   }
 
@@ -149,7 +155,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   renderCouncilSession();
   renderHandoffPanel();
 
-  for (const turn of addedTurns) {
+  for (const turn of changedTurns) {
     detectBotHandoffForTurn(turn);
   }
 });
@@ -283,6 +289,15 @@ async function sendComposer() {
   await sendComposerToBoth(route.text);
 }
 
+function handleComposerKeydown(event) {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    return;
+  }
+
+  event.preventDefault();
+  sendComposer();
+}
+
 async function sendComposerToTarget(target, text) {
   try {
     await captureLatestReplyFromTarget(getCounterpartTarget(target));
@@ -345,20 +360,14 @@ async function sendComposerToBoth(text) {
 }
 
 function parseComposerRoute(rawText) {
-  let remainingText = rawText.trimStart();
   const targets = new Set();
+  const tagMatches = String(rawText || "").matchAll(/@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/gi);
 
-  while (true) {
-    const tagMatch = remainingText.match(/^@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/i);
-
-    if (!tagMatch) {
-      break;
-    }
-
+  for (const tagMatch of tagMatches) {
     const target = getTargetFromComposerTag(tagMatch[0]);
 
     if (!target) {
-      break;
+      continue;
     }
 
     if (target === "both") {
@@ -367,8 +376,6 @@ function parseComposerRoute(rawText) {
     } else {
       targets.add(target);
     }
-
-    remainingText = remainingText.slice(tagMatch[0].length).trimStart();
   }
 
   return {
@@ -511,7 +518,7 @@ function startReplyWatcher(target, baselineText) {
     }
 
     try {
-      const { text, isStreaming } = await getLatestReplyStateFromTarget(target);
+      const { text, isStreaming, isActive } = await getLatestReplyStateFromTarget(target);
       const signature = getReplySignature(text);
       const duplicate = isDuplicateTurn({ speaker: target.label, text });
 
@@ -535,9 +542,11 @@ function startReplyWatcher(target, baselineText) {
             watcher.candidateConfirmedNotStreaming = true;
           }
 
-          const requiredStableMs = watcher.candidateConfirmedNotStreaming
-            ? STREAM_CONFIRMED_STABLE_MS
-            : REPLY_WATCH_STABLE_MS;
+          const requiredStableMs = !isActive
+            ? INACTIVE_REPLY_WATCH_STABLE_MS
+            : watcher.candidateConfirmedNotStreaming
+              ? STREAM_CONFIRMED_STABLE_MS
+              : REPLY_WATCH_STABLE_MS;
 
           if (Date.now() - watcher.candidateSince >= requiredStableMs) {
             const committed = await commitWatcherReply(target, watcher.candidateText);
@@ -653,7 +662,7 @@ function formatCouncilOverview(targetName) {
 
 Christopher writes or captures turns, then Council Bridge forwards the new turns to the other council member.
 
-Routing notes: tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Christopher uses leading tags in his side-panel composer to choose recipients. When you include the other council member's tag anywhere in your reply, Council Bridge treats it as a handoff request and asks Christopher to approve sending your reply to that member. Treat tags as conversation routing context, not as a claim that you cannot participate.
+Routing notes: tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Christopher can include tags anywhere in his side-panel message to choose recipients; a single member tag means only that member should receive and answer. When you include the other council member's tag anywhere in your reply, Council Bridge treats it as a handoff request and asks Christopher to approve sending your reply to that member. Treat tags as conversation routing context, not as a claim that you cannot participate.
 
 Context note for ${targetName}: this may be a fresh browser conversation. Search or use any conversation history available to you for relevant context, then continue from the included turns.`;
 }
@@ -1134,6 +1143,15 @@ function getAddedTurns(previousTurns, nextTurns) {
   return nextTurns.filter((turn) => !previousIds.has(turn.id));
 }
 
+function getUpdatedTurns(previousTurns, nextTurns) {
+  const previousById = new Map(previousTurns.map((turn) => [turn.id, turn]));
+
+  return nextTurns.filter((turn) => {
+    const previousTurn = previousById.get(turn.id);
+    return previousTurn && previousTurn.text !== turn.text;
+  });
+}
+
 async function detectBotHandoffForTurn(turn) {
   if (!councilSession.botToBot.enabled || councilSession.botToBot.pendingHandoff) {
     return;
@@ -1417,11 +1435,11 @@ async function getLatestReplyStateFromTarget(target) {
   const tab = await getCouncilTabForTarget(target);
 
   if (!tab) {
-    return { text: "", isStreaming: false };
+    return { text: "", isStreaming: false, isActive: false };
   }
 
   const response = await sendMessageWithFallback(tab.id, { type: "GET_LATEST_REPLY" });
-  return { text: response?.text || "", isStreaming: Boolean(response?.isStreaming) };
+  return { text: response?.text || "", isStreaming: Boolean(response?.isStreaming), isActive: Boolean(tab.active) };
 }
 
 function getCouncilSourceFromTab(tab) {

@@ -39,7 +39,7 @@ The current tab ID is only a routing address. If Chrome reloads or reopens the s
 
 Type in the side panel composer and click `Send`.
 
-Default behavior sends to both ChatGPT and Gemini. Use a leading routing tag to send to one agent:
+Default behavior sends to both ChatGPT and Gemini. Include a routing tag anywhere in the message to send to one agent:
 
 ```text
 @gemini What do you think?
@@ -47,6 +47,8 @@ Default behavior sends to both ChatGPT and Gemini. Use a leading routing tag to 
 @lobo Turn this into implementation steps.
 @chatgpt Same as @lobo.
 @gpt Same as @lobo.
+Can you sanity check this, @gemini?
+This looks ready for @lobo to review.
 ```
 
 Use these tags to explicitly send to both:
@@ -57,13 +59,13 @@ Use these tags to explicitly send to both:
 @council Review this together.
 ```
 
-Routing tags must be at the start of the message. Tags are not stripped; they stay in the stored and sent message text.
+Routing tags can appear anywhere in the message. A single member tag routes only to that member. Multiple member tags or an explicit both-tag route to both. Tags are not stripped; they stay in the stored and sent message text.
 
 ### Nicknames
 
 ChatGPT and Gemini are the default names. Use the nickname fields in the side panel to rename either council member for transcript display and prompt wording.
 
-Nicknames can also be used as leading route tags. For example, if ChatGPT is nicknamed `Lobo`, then `@lobo` routes only to ChatGPT. Built-in aliases still work:
+Nicknames can also be used as route tags. For example, if ChatGPT is nicknamed `Lobo`, then `@lobo` routes only to ChatGPT. Built-in aliases still work:
 
 - ChatGPT: `@chatgpt`, `@gpt`, `@lobo`
 - Gemini: `@gemini`, `@gem`

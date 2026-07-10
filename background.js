@@ -5,6 +5,7 @@ const STORAGE_KEYS = {
 
 const MAX_TURNS = 80;
 const PENDING_CONVERSATION_PREFIX = "pending";
+const REPLY_SUPERSEDE_WINDOW_MS = 10 * 60 * 1000;
 const TARGETS = {
   chatgpt: {
     label: "ChatGPT",
@@ -273,6 +274,30 @@ async function commitReply({ turns, session, speaker, text, completedAt }) {
   }
 
   const createdAt = normalizeTimestamp(completedAt);
+  const supersededIndex = findSupersededReplyIndex(turns, speaker, text, createdAt);
+
+  if (supersededIndex >= 0) {
+    const nextTurns = turns.map((turn, index) => {
+      if (index !== supersededIndex) {
+        return turn;
+      }
+
+      return {
+        ...turn,
+        createdAt,
+        text,
+        target: ""
+      };
+    });
+
+    await chrome.storage.local.set({ [STORAGE_KEYS.turns]: nextTurns });
+    return { ok: true, added: false, updated: true };
+  }
+
+  if (isShorterVersionOfExistingReply(turns, speaker, text, createdAt)) {
+    return { ok: true, added: false, reason: "superseded" };
+  }
+
   const nextTurns = [
     ...turns,
     {
@@ -498,6 +523,58 @@ function isDuplicateTurn(turns, speaker, text) {
   return turns.some((turn) => {
     return turn.speaker === speaker && normalizeForDuplicate(turn.text || "") === normalizedText;
   });
+}
+
+function findSupersededReplyIndex(turns, speaker, text, completedAt) {
+  const incomingText = normalizeForDuplicate(text);
+
+  if (incomingText.length === 0) {
+    return -1;
+  }
+
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+
+    if (!isRecentSpeakerReply(turn, speaker, completedAt)) {
+      continue;
+    }
+
+    const existingText = normalizeForDuplicate(turn.text || "");
+
+    if (isLongerContinuation(incomingText, existingText)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function isShorterVersionOfExistingReply(turns, speaker, text, completedAt) {
+  const incomingText = normalizeForDuplicate(text);
+
+  return turns.some((turn) => {
+    if (!isRecentSpeakerReply(turn, speaker, completedAt)) {
+      return false;
+    }
+
+    return isLongerContinuation(normalizeForDuplicate(turn.text || ""), incomingText);
+  });
+}
+
+function isRecentSpeakerReply(turn, speaker, completedAt) {
+  return (
+    turn.speaker === speaker &&
+    !turn.target &&
+    Math.abs(normalizeTimestamp(completedAt) - normalizeTimestamp(turn.createdAt)) <= REPLY_SUPERSEDE_WINDOW_MS
+  );
+}
+
+function isLongerContinuation(longerText, shorterText) {
+  return (
+    shorterText.length >= 10 &&
+    longerText.length > shorterText.length + 8 &&
+    longerText.startsWith(shorterText)
+  );
 }
 
 function normalizeReplyText(text) {
