@@ -71,28 +71,30 @@ Nicknames can also be used as leading route tags. For example, if ChatGPT is nic
 
 When Council Bridge sends to an agent, it includes every transcript turn that agent has not seen since it was last advised. It does not resend the whole transcript every time.
 
-The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The overview explains that leading `@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and asks the agent to use any history available to it for context.
+The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The overview explains that `@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and asks the agent to use any history available to it for context.
 
 ### Bot-to-Bot Handoffs
 
-Assistant replies can request a controlled handoff by starting their response with a route tag for the other council member.
+Assistant replies can request a controlled handoff by including a route tag for the other council member anywhere in the reply.
 
 Examples that create a pending handoff:
 
 ```text
 @lobo can you review this?
 @gemini what do you think?
+I think this is ready for @gemini to critique.
+The implementation looks reasonable; @lobo should check the edge cases.
 ```
 
 Examples that do not create a handoff:
 
 ```text
-I think @lobo should review this later.
-Ah, @gemini can you check this?
-Here is a note: @gemini
+@both please review this.
+@all should see the final summary.
+I am @gemini, so I should not hand this to myself.
 ```
 
-Only leading tags count. Council Bridge creates a pending handoff instead of sending automatically. The side panel shows a Human Gavel notice with:
+The first valid tag for the other council member creates a pending handoff. `@both`, `@all`, `@council`, unknown tags, and self-tags are ignored for bot-to-bot handoffs. Council Bridge creates a pending handoff instead of sending automatically. The side panel shows a Human Gavel notice with:
 
 - `Approve handoff`
 - `Reject handoff`

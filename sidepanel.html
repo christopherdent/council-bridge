@@ -43,15 +43,15 @@
 
       main {
         display: grid;
-        grid-template-rows: auto minmax(160px, 1fr) auto;
-        gap: 12px;
+        grid-template-rows: auto minmax(220px, 1fr) auto;
+        gap: 8px;
         height: 100vh;
-        padding: 14px;
+        padding: 10px;
       }
 
       header {
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       .topline {
@@ -63,7 +63,7 @@
 
       h1 {
         margin: 0;
-        font-size: 20px;
+        font-size: 17px;
         font-weight: 700;
         letter-spacing: 0;
       }
@@ -71,7 +71,7 @@
       button {
         border: 1px solid var(--border);
         border-radius: 6px;
-        padding: 9px 10px;
+        padding: 7px 9px;
         color: var(--text);
         background: var(--secondary);
         font: inherit;
@@ -96,17 +96,59 @@
 
       .quick-actions {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
+        grid-template-columns: 1.25fr 1fr 1fr;
+        gap: 6px;
+      }
+
+      .quick-actions button {
+        min-width: 0;
+        padding: 6px 7px;
+        overflow: hidden;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .session-panel {
         display: grid;
-        gap: 8px;
+        gap: 7px;
         border: 1px solid var(--border);
         border-radius: 7px;
-        padding: 9px;
+        padding: 7px 8px;
         background: var(--panel);
+      }
+
+      .session-panel summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        color: var(--text);
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+        list-style: none;
+      }
+
+      .session-panel summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .session-panel summary::after {
+        content: "Show";
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .session-panel[open] summary::after {
+        content: "Hide";
+      }
+
+      .session-panel-body {
+        display: grid;
+        gap: 7px;
+        padding-top: 6px;
       }
 
       .session-actions {
@@ -194,7 +236,7 @@
       }
 
       .status {
-        min-height: 17px;
+        min-height: 15px;
         margin: 0;
         color: var(--muted);
         font-size: 12px;
@@ -204,7 +246,7 @@
       .turns {
         display: flex;
         flex-direction: column;
-        gap: 10px;
+        gap: 8px;
         min-height: 0;
         overflow-y: auto;
         padding-right: 2px;
@@ -225,7 +267,7 @@
         border: 1px solid var(--border);
         border-left-width: 4px;
         border-radius: 7px;
-        padding: 10px;
+        padding: 9px;
         background: var(--panel);
       }
 
@@ -249,6 +291,7 @@
 
       .turn.typing {
         border-style: dashed;
+        min-height: 74px;
       }
 
       .typing-state {
@@ -258,25 +301,42 @@
       }
 
       .typing-text {
+        display: inline-flex;
+        align-items: baseline;
+        min-width: 92px;
         color: var(--muted);
         font-weight: 700;
       }
 
-      .typing-dots {
+      .typing-dot {
         display: inline-block;
-        width: 18px;
-        overflow: hidden;
+        width: 5px;
+        opacity: 0.25;
         vertical-align: bottom;
-        animation: typing-dots 900ms steps(4, end) infinite;
+        animation: typing-dot 900ms ease-in-out infinite;
       }
 
-      @keyframes typing-dots {
-        0% {
-          width: 0;
+      .typing-dot:nth-child(1) {
+        animation-delay: 0ms;
+      }
+
+      .typing-dot:nth-child(2) {
+        animation-delay: 140ms;
+      }
+
+      .typing-dot:nth-child(3) {
+        animation-delay: 280ms;
+      }
+
+      @keyframes typing-dot {
+        0%,
+        70%,
+        100% {
+          opacity: 0.25;
         }
 
-        100% {
-          width: 18px;
+        35% {
+          opacity: 1;
         }
       }
 
@@ -315,16 +375,17 @@
 
       .composer {
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       textarea {
         width: 100%;
-        min-height: 112px;
+        min-height: 68px;
+        max-height: 150px;
         resize: vertical;
         border: 1px solid var(--border);
         border-radius: 6px;
-        padding: 10px;
+        padding: 8px;
         color: var(--text);
         background: var(--panel);
         font: 13px/1.4 Arial, Helvetica, sans-serif;
@@ -333,6 +394,10 @@
       .send-row {
         display: grid;
         gap: 8px;
+      }
+
+      .send-row button {
+        padding: 8px 10px;
       }
     </style>
   </head>
@@ -343,28 +408,31 @@
           <h1>Council Bridge</h1>
           <button id="clearConversation" class="link" type="button">Clear</button>
         </div>
-        <button id="passSelection" class="primary" type="button">Pass selected reply to other AI</button>
         <div class="quick-actions">
-          <button id="addSelection" type="button">Add selection</button>
-          <button id="refreshReplies" type="button">Refresh replies</button>
+          <button id="passSelection" class="primary" type="button" title="Pass selected reply to the other council member">Pass</button>
+          <button id="addSelection" type="button" title="Add highlighted text from the active council tab">Add</button>
+          <button id="refreshReplies" type="button" title="Capture the latest visible replies from council tabs">Refresh</button>
         </div>
-        <section class="session-panel" aria-label="Council session">
-          <p id="sessionSummary" class="session-summary"></p>
-          <label class="nickname-row">
-            <span>ChatGPT name</span>
-            <input id="chatgptNickname" type="text" placeholder="ChatGPT">
-          </label>
-          <label class="nickname-row">
-            <span>Gemini name</span>
-            <input id="geminiNickname" type="text" placeholder="Gemini">
-          </label>
-          <div class="session-actions">
-            <button id="setActiveAsChatGPT" type="button">Set as ChatGPT</button>
-            <button id="setActiveAsGemini" type="button">Set as Gemini</button>
-            <button id="removeActiveFromCouncil" type="button">Remove tab</button>
-            <button id="toggleCapturePause" type="button">Pause capture</button>
+        <details class="session-panel" aria-label="Council session">
+          <summary>Council setup</summary>
+          <div class="session-panel-body">
+            <p id="sessionSummary" class="session-summary"></p>
+            <label class="nickname-row">
+              <span>ChatGPT name</span>
+              <input id="chatgptNickname" type="text" placeholder="ChatGPT">
+            </label>
+            <label class="nickname-row">
+              <span>Gemini name</span>
+              <input id="geminiNickname" type="text" placeholder="Gemini">
+            </label>
+            <div class="session-actions">
+              <button id="setActiveAsChatGPT" type="button" title="Assign the active tab as ChatGPT">Set ChatGPT</button>
+              <button id="setActiveAsGemini" type="button" title="Assign the active tab as Gemini">Set Gemini</button>
+              <button id="removeActiveFromCouncil" type="button" title="Remove the active tab from this council">Remove tab</button>
+              <button id="toggleCapturePause" type="button" title="Pause or resume automatic reply capture">Pause capture</button>
+            </div>
           </div>
-        </section>
+        </details>
         <section id="handoffPanel" class="handoff-panel" aria-label="Pending handoff">
           <p id="handoffNotice" class="handoff-notice"></p>
           <div class="handoff-actions">

@@ -13,8 +13,8 @@ const STREAM_CONFIRMED_STABLE_MS = 1200;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
-const TYPEWRITER_INTERVAL_MS = 18;
-const TYPEWRITER_MAX_DURATION_MS = 850;
+const TYPEWRITER_INTERVAL_MS = 28;
+const TYPEWRITER_MAX_DURATION_MS = 600;
 const PENDING_CONVERSATION_PREFIX = "pending";
 
 const TARGETS = {
@@ -653,7 +653,7 @@ function formatCouncilOverview(targetName) {
 
 Christopher writes or captures turns, then Council Bridge forwards the new turns to the other council member.
 
-Routing notes: leading tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Treat them as conversation context, not as a claim that you cannot participate.
+Routing notes: tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Christopher uses leading tags in his side-panel composer to choose recipients. When you include the other council member's tag anywhere in your reply, Council Bridge treats it as a handoff request and asks Christopher to approve sending your reply to that member. Treat tags as conversation routing context, not as a claim that you cannot participate.
 
 Context note for ${targetName}: this may be a fresh browser conversation. Search or use any conversation history available to you for relevant context, then continue from the included turns.`;
 }
@@ -746,11 +746,12 @@ function startTypewriterForTurn(turn) {
 function revealTypewriterChunk(turn, visibleLength) {
   const text = String(turn.text || "");
   const maxSteps = Math.max(1, Math.floor(TYPEWRITER_MAX_DURATION_MS / TYPEWRITER_INTERVAL_MS));
-  const chunkSize = Math.max(8, Math.ceil(text.length / maxSteps));
+  const chunkSize = Math.max(14, Math.ceil(text.length / maxSteps));
   const nextVisibleLength = Math.min(text.length, visibleLength + chunkSize);
+  const nextText = text.slice(0, nextVisibleLength);
 
-  animatedTurnTextById.set(turn.id, text.slice(0, nextVisibleLength));
-  renderTurns();
+  animatedTurnTextById.set(turn.id, nextText);
+  updateRenderedTurnText(turn.id, nextText);
 
   if (nextVisibleLength >= text.length) {
     animatedTurnTextById.delete(turn.id);
@@ -762,6 +763,25 @@ function revealTypewriterChunk(turn, visibleLength) {
     revealTypewriterChunk(turn, nextVisibleLength);
   }, TYPEWRITER_INTERVAL_MS);
   typewriterTimers.set(turn.id, timerId);
+}
+
+function updateRenderedTurnText(turnId, text) {
+  const textEl = turnsEl.querySelector(`[data-turn-id="${escapeCssIdentifier(turnId)}"] .turn-text`);
+
+  if (!textEl) {
+    renderTurns();
+    return;
+  }
+
+  textEl.textContent = text;
+}
+
+function escapeCssIdentifier(value) {
+  if (globalThis.CSS?.escape) {
+    return globalThis.CSS.escape(String(value));
+  }
+
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 function clearTypewriterTimers() {
@@ -798,6 +818,7 @@ function renderTurns() {
   for (const turn of visibleTurns) {
     const turnEl = document.createElement("article");
     turnEl.className = `turn ${turn.speaker.toLowerCase()}`;
+    turnEl.dataset.turnId = turn.id;
 
     const metaEl = document.createElement("div");
     metaEl.className = "turn-meta";
@@ -855,12 +876,13 @@ function renderTypingIndicators() {
     textEl.className = "turn-text typing-text";
     textEl.textContent = "Working";
 
-    const dotsEl = document.createElement("span");
-    dotsEl.className = "typing-dots";
-    dotsEl.setAttribute("aria-hidden", "true");
-    dotsEl.textContent = "...";
-
-    textEl.append(dotsEl);
+    for (let index = 0; index < 3; index += 1) {
+      const dotEl = document.createElement("span");
+      dotEl.className = "typing-dot";
+      dotEl.setAttribute("aria-hidden", "true");
+      dotEl.textContent = ".";
+      textEl.append(dotEl);
+    }
     metaEl.append(speakerEl, stateEl);
     turnEl.append(metaEl, textEl);
     turnsEl.append(turnEl);
@@ -1127,7 +1149,7 @@ async function detectBotHandoffForTurn(turn) {
     return;
   }
 
-  const detected = parseLeadingHandoffTag(turn.text, fromAgent);
+  const detected = parseHandoffTag(turn.text, fromAgent);
 
   if (!detected) {
     return;
@@ -1177,23 +1199,23 @@ async function detectBotHandoffForTurn(turn) {
   }
 }
 
-function parseLeadingHandoffTag(text, fromAgent) {
-  const tagMatch = String(text || "").trimStart().match(/^@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/i);
+function parseHandoffTag(text, fromAgent) {
+  const tagMatches = String(text || "").matchAll(/@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/gi);
 
-  if (!tagMatch) {
-    return null;
+  for (const tagMatch of tagMatches) {
+    const target = getTargetFromComposerTag(tagMatch[0]);
+
+    if (!target || target === "both" || target.key === fromAgent) {
+      continue;
+    }
+
+    return {
+      tag: tagMatch[0],
+      toAgent: target.key
+    };
   }
 
-  const target = getTargetFromComposerTag(tagMatch[0]);
-
-  if (!target || target === "both" || target.key === fromAgent) {
-    return null;
-  }
-
-  return {
-    tag: tagMatch[0],
-    toAgent: target.key
-  };
+  return null;
 }
 
 function shouldAutoApprovePendingHandoff() {
