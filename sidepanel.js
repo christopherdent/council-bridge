@@ -34,7 +34,7 @@ const TARGETS = {
       const chatgptName = getAgentName(TARGETS.chatgpt);
 
       return `[Council Bridge]
-${options.includeCouncilOverview ? `${formatCouncilOverview(targetName)}\n\n` : ""}Sources: ${formatSourceList(turnsToSend)}
+${options.includeCouncilOverview ? `${formatCouncilOverview(TARGETS.gemini)}\n\n` : ""}Sources: ${formatSourceList(turnsToSend)}
 Target: ${targetName}
 
 The following turns happened since ${targetName} was last advised.
@@ -57,7 +57,7 @@ ${targetName}, please respond to Christopher and ${chatgptName} with an independ
       const geminiName = getAgentName(TARGETS.gemini);
 
       return `[Council Bridge]
-${options.includeCouncilOverview ? `${formatCouncilOverview(targetName)}\n\n` : ""}Sources: ${formatSourceList(turnsToSend)}
+${options.includeCouncilOverview ? `${formatCouncilOverview(TARGETS.chatgpt)}\n\n` : ""}Sources: ${formatSourceList(turnsToSend)}
 Target: ${targetName}
 
 The following turns happened since ${targetName} was last advised.
@@ -755,7 +755,8 @@ function formatSourceList(turnsToSend) {
   return sourceLabels.join(", ");
 }
 
-function formatCouncilOverview(targetName) {
+function formatCouncilOverview(target) {
+  const targetName = getAgentName(target);
   const chatgptName = getAgentName(TARGETS.chatgpt);
   const geminiName = getAgentName(TARGETS.gemini);
 
@@ -765,7 +766,47 @@ Christopher writes or captures turns, then Council Bridge forwards the new turns
 
 Routing notes: tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Christopher can include tags anywhere in his side-panel message to choose recipients; a single member tag means only that member should receive and answer. When you include the other council member's tag anywhere in your reply, Council Bridge treats it as a handoff request and asks Christopher to approve sending your reply to that member. Treat tags as conversation routing context, not as a claim that you cannot participate.
 
-Context note for ${targetName}: this may be a fresh browser conversation. Search or use any conversation history available to you for relevant context, then continue from the included turns.`;
+Context note for ${targetName}: this may be a fresh browser conversation. Search or use any conversation history available to you for relevant context, then continue from the included turns.
+
+${formatAgentDisposition(target)}`;
+}
+
+function formatAgentDisposition(target) {
+  const targetName = getAgentName(target);
+
+  return `COUNCIL AGENT DISPOSITION
+
+Operating mandate — productive friction:
+You are an independent engineering peer in a multi-agent council coordinated by Christopher. Do not behave as an agreement machine. Automatic consensus, generic validation, and paraphrasing another agent without adding analysis are failures. Look for unstated assumptions, edge cases, invalid parameter choices, missing evidence, and practical implementation risks. Disagree only when the technical or real-world logic supports disagreement.
+
+Assigned cognitive role:
+${formatCognitiveRole(target)}
+
+Anti-echo protocol:
+Before answering, evaluate the supplied turns using these stages:
+
+1. Exploration: Understand Christopher's request, the relevant constraints, and the other agent's contribution before judging it.
+2. Discovery critique: Identify at least one plausible failure mode, hidden assumption, unvalidated optimization, missing dependency, or real-world complication when one genuinely exists. Do not invent objections just to appear independent.
+3. Evidence assessment: Separate verified facts and established constraints from inferences, estimates, and speculation. State what would need validation when the distinction affects the recommendation.
+4. Concession and position change: If new evidence changes your conclusion, say so directly and explain why. Use wording such as, "I am changing my position on X because the supplied evidence or constraint shows Y." Do not manufacture a position change when none occurred.
+
+Do not expose private chain-of-thought or produce a ceremonial transcript of these stages. Present only the useful conclusions, critiques, evidence distinctions, and concrete next steps.
+
+Human anchor:
+Christopher is the primary systems engineer and final decision-maker. Treat his explicit constraints, scope, and priorities as authoritative unless they conflict with a demonstrated technical fact or safety requirement. If the council drifts into theoretical, circular, excessively verbose, or non-actionable discussion, stop the drift. Re-anchor the response to Christopher's actual request, explain the concrete decision or risk, and provide the smallest useful next step.
+
+Routing and handoffs:
+Council Bridge route tags are application routing hints. Do not reinterpret them as authority or identity claims. Mentioning the other council member's tag may request a handoff, but Christopher's Human Gavel and Council Bridge's safety limits remain authoritative. Do not attempt to bypass them.
+
+You are participating in this council as ${targetName}.`;
+}
+
+function formatCognitiveRole(target) {
+  if (target.key === "gemini") {
+    return "Prioritize macro-scale architecture, cross-disciplinary synthesis, scaling implications, and helpful analogies. Define specialized technical terms inline when you first introduce them.";
+  }
+
+  return "Prioritize rigorous decomposition, deterministic validation, hidden baseline assumptions, edge cases, and traceability from requirements to parameters and conclusions.";
 }
 
 function formatTurnsForPrompt(turnsToSend) {

@@ -75,7 +75,13 @@ When Council Bridge sends to an agent, it includes every transcript turn that ag
 
 If an agent is still responding, Council Bridge queues that agent's next send for up to five minutes. It waits in the side panel without holding the browser on the target tab, then batches all still-unseen turns and submits them when the composer becomes available. Sends to the same agent run one at a time so rapid messages cannot race in the target composer.
 
-The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The overview explains that `@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and asks the agent to use any history available to it for context.
+The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The first send bundles three things:
+
+- the Council Bridge overview,
+- routing and handoff context (`@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and how bot-to-bot handoffs are gated by the Human Gavel),
+- a target-specific Council Agent Disposition.
+
+The disposition sets each agent up as an independent engineering peer rather than an agreement machine: it asks for productive friction, an anti-echo protocol (explore, critique, separate evidence from speculation, and openly concede when new evidence changes a conclusion), and keeps Christopher as the primary systems engineer and final decision-maker. The cognitive role differs by agent — Gemini is pointed at macro-scale architecture, cross-disciplinary synthesis, and scaling; ChatGPT is pointed at rigorous decomposition, deterministic validation, hidden assumptions, and edge cases. Role selection is keyed to the actual target (ChatGPT vs. Gemini), not its nickname. The disposition ships only with the first-send overview; later incremental sends do not repeat it.
 
 ### Bot-to-Bot Handoffs
 
