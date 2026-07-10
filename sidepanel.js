@@ -14,6 +14,8 @@ const INACTIVE_REPLY_SETTLE_MS = 15000;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 const BACKGROUND_SUBMIT_ACTIVE_HOLD_MS = 900;
+const TARGET_READY_POLL_MS = 500;
+const TARGET_READY_TIMEOUT_MS = 5 * 60 * 1000;
 const TYPEWRITER_INTERVAL_MS = 28;
 const TYPEWRITER_MAX_DURATION_MS = 600;
 const PENDING_CONVERSATION_PREFIX = "pending";
@@ -96,6 +98,7 @@ let deliveryState = {
 };
 let councilSession = normalizeCouncilSession();
 const replyWatchers = new Map();
+const targetSendQueues = new Map();
 let deliveryWriteQueue = Promise.resolve();
 
 let renderedTurnIds = new Set();
@@ -406,8 +409,23 @@ function normalizeTagAlias(value) {
   return String(value || "").toLowerCase().replace(/^@/, "").replace(/[,:;.!?]+$/g, "").replace(/[^a-z0-9_-]+/g, "");
 }
 
-async function sendToTarget(target) {
-  const turnsToSend = getUnseenTurnsForTarget(target);
+function sendToTarget(target) {
+  const previousSend = targetSendQueues.get(target.key) || Promise.resolve();
+  const queuedSend = previousSend
+    .catch(() => {})
+    .then(() => performSendToTarget(target));
+
+  targetSendQueues.set(target.key, queuedSend);
+
+  return queuedSend.finally(() => {
+    if (targetSendQueues.get(target.key) === queuedSend) {
+      targetSendQueues.delete(target.key);
+    }
+  });
+}
+
+async function performSendToTarget(target) {
+  let turnsToSend = getUnseenTurnsForTarget(target);
   const tab = await getCouncilTabForTarget(target);
 
   if (!tab) {
@@ -421,6 +439,20 @@ async function sendToTarget(target) {
   }
 
   await waitForTabReady(tab.id);
+
+  const targetReady = await waitForTargetReadyToSend(target, tab.id);
+
+  if (!targetReady) {
+    setStatus(`${getAgentName(target)} stayed busy; message was not sent.`);
+    return false;
+  }
+
+  turnsToSend = getUnseenTurnsForTarget(target);
+
+  if (turnsToSend.length === 0) {
+    setStatus(`${getAgentName(target)} is already caught up.`);
+    return true;
+  }
 
   const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
   const prompt = target.wrapTurns(turnsToSend, {
@@ -461,6 +493,32 @@ async function sendToTarget(target) {
   }
 
   setStatus(`Could not find ${getAgentName(target)}'s prompt box.`);
+  return false;
+}
+
+async function waitForTargetReadyToSend(target, tabId) {
+  const startedAt = Date.now();
+  let waitingStatusShown = false;
+
+  while (Date.now() - startedAt < TARGET_READY_TIMEOUT_MS) {
+    try {
+      const state = await sendMessageWithFallback(tabId, { type: "GET_COMPOSER_STATE" });
+
+      if (state?.promptAvailable && !state?.isStreaming) {
+        return true;
+      }
+
+      if (!waitingStatusShown) {
+        setStatus(`${getAgentName(target)} is still responding; queued until ready.`);
+        waitingStatusShown = true;
+      }
+    } catch (error) {
+      // Navigation and background-tab throttling can briefly interrupt polling.
+    }
+
+    await delay(TARGET_READY_POLL_MS);
+  }
+
   return false;
 }
 

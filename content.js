@@ -20,6 +20,14 @@ if (!window.__councilBridgeContentLoaded) {
       return;
     }
 
+    if (message?.type === "GET_COMPOSER_STATE") {
+      sendResponse({
+        promptAvailable: Boolean(findVisiblePromptBox()),
+        isStreaming: isReplyStillStreaming()
+      });
+      return;
+    }
+
     if (message?.type === "INSERT_TEXT") {
       const ok = insertTextIntoPrompt(message.text || "", {
         showAlerts: message.showAlerts !== false

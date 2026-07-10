@@ -73,6 +73,8 @@ Nicknames can also be used as route tags. For example, if ChatGPT is nicknamed `
 
 When Council Bridge sends to an agent, it includes every transcript turn that agent has not seen since it was last advised. It does not resend the whole transcript every time.
 
+If an agent is still responding, Council Bridge queues that agent's next send for up to five minutes. It waits in the side panel without holding the browser on the target tab, then batches all still-unseen turns and submits them when the composer becomes available. Sends to the same agent run one at a time so rapid messages cannot race in the target composer.
+
 The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The overview explains that `@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and asks the agent to use any history available to it for context.
 
 ### Bot-to-Bot Handoffs
