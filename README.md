@@ -177,4 +177,13 @@ ChatGPT, please respond to Christopher and Gemini. Agree, disagree, refine the p
 - `background.js` opens the side panel when the extension icon is clicked.
 - `sidepanel.html` provides the persistent side panel UI.
 - `sidepanel.js` handles the side panel transcript, unseen-turn batching, typed composer, latest-reply capture, and one-click pass flow.
+- `routing.js` contains the shared routing-tag parser used by the side panel and regression tests.
 - `content.js` reads selected text, captures the latest visible reply, and inserts text into visible prompt boxes.
+
+## Tests
+
+Run routing parser regressions with:
+
+```bash
+node --test test/routing.test.js
+```

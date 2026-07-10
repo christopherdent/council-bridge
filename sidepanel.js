@@ -373,10 +373,9 @@ async function sendComposerToBoth(text) {
 
 function parseComposerRoute(rawText) {
   const targets = new Set();
-  const tagMatches = String(rawText || "").matchAll(/@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/gi);
 
-  for (const tagMatch of tagMatches) {
-    const target = getTargetFromComposerTag(tagMatch[0]);
+  for (const tagMatch of CouncilBridgeRouting.findRoutingTags(rawText)) {
+    const target = getTargetFromComposerTag(tagMatch.tag);
 
     if (!target) {
       continue;
@@ -397,25 +396,11 @@ function parseComposerRoute(rawText) {
 }
 
 function getTargetFromComposerTag(tag) {
-  const normalized = normalizeTagAlias(tag);
-
-  if (["gemini", "gem", normalizeTagAlias(getAgentName(TARGETS.gemini))].includes(normalized)) {
-    return TARGETS.gemini;
-  }
-
-  if (["lobo", "chatgpt", "gpt", normalizeTagAlias(getAgentName(TARGETS.chatgpt))].includes(normalized)) {
-    return TARGETS.chatgpt;
-  }
-
-  if (["both", "council", "all"].includes(normalized)) {
-    return "both";
-  }
-
-  return null;
+  return CouncilBridgeRouting.resolveTargetFromTag(tag, TARGETS, getAgentName);
 }
 
 function normalizeTagAlias(value) {
-  return String(value || "").toLowerCase().replace(/^@/, "").replace(/[,:;.!?]+$/g, "").replace(/[^a-z0-9_-]+/g, "");
+  return CouncilBridgeRouting.normalizeTagAlias(value);
 }
 
 function sendToTarget(target) {
@@ -1496,22 +1481,7 @@ async function detectBotHandoffForTurn(turn) {
 }
 
 function parseHandoffTag(text, fromAgent) {
-  const tagMatches = String(text || "").matchAll(/@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/gi);
-
-  for (const tagMatch of tagMatches) {
-    const target = getTargetFromComposerTag(tagMatch[0]);
-
-    if (!target || target === "both" || target.key === fromAgent) {
-      continue;
-    }
-
-    return {
-      tag: tagMatch[0],
-      toAgent: target.key
-    };
-  }
-
-  return null;
+  return CouncilBridgeRouting.parseHandoffTag(text, fromAgent, getTargetFromComposerTag);
 }
 
 function shouldAutoApprovePendingHandoff() {
