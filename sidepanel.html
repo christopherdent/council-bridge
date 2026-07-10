@@ -94,6 +94,34 @@
         gap: 8px;
       }
 
+      .session-panel {
+        display: grid;
+        gap: 8px;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 9px;
+        background: var(--panel);
+      }
+
+      .session-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+      }
+
+      .session-actions button {
+        padding: 7px 8px;
+        font-size: 12px;
+      }
+
+      .session-summary {
+        margin: 0;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+        white-space: pre-line;
+      }
+
       button.link {
         border: 0;
         padding: 4px 0;
@@ -224,6 +252,15 @@
           <button id="addSelection" type="button">Add selection</button>
           <button id="refreshReplies" type="button">Refresh replies</button>
         </div>
+        <section class="session-panel" aria-label="Council session">
+          <p id="sessionSummary" class="session-summary"></p>
+          <div class="session-actions">
+            <button id="setActiveAsChatGPT" type="button">Set as Lobo</button>
+            <button id="setActiveAsGemini" type="button">Set as Gemini</button>
+            <button id="removeActiveFromCouncil" type="button">Remove tab</button>
+            <button id="toggleCapturePause" type="button">Pause capture</button>
+          </div>
+        </section>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </header>
 

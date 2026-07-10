@@ -17,15 +17,21 @@ It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 
 1. Open ChatGPT and Gemini
 2. Click the extension icon to open the side panel
-3. Highlight a response in ChatGPT or Gemini
-4. Click Pass selection to other AI
-5. Council Bridge captures the selected text, inserts the wrapped prompt into the other tab, and clicks send
+3. Open the ChatGPT tab you want in the council and click Set as Lobo
+4. Open the Gemini tab you want in the council and click Set as Gemini
+5. Highlight a response in a council tab
+6. Click Pass selection to other AI
+7. Council Bridge captures the selected text, inserts the wrapped prompt into the other registered council tab, and clicks send
+
+Only explicitly assigned council conversations are captured or used as send targets. Other ChatGPT or Gemini tabs are ignored. Council membership is anchored to the conversation ID in the URL (`chatgpt.com/c/...` or `gemini.google.com/app/...`), while the current tab ID is treated as a recoverable routing address. If Chrome reloads or reopens the same council conversation with a new tab ID, Council Bridge auto-heals the route. If an assigned tab navigates to another conversation URL, the member is marked stale until you switch back or explicitly reassign it.
 
 Use Add selection to add highlighted ChatGPT or Gemini text to the side panel without passing it to the other AI.
 
 Use Refresh replies to pull the latest visible ChatGPT and Gemini replies into the side panel conversation view.
 
 Completed ChatGPT and Gemini replies are also added automatically after their visible response text stops changing.
+
+Use Pause capture if an unrelated tab or conversation should not be collected while you inspect it.
 
 Typed messages in the side panel use Send to Gemini, Send to ChatGPT, or Insert for both. Council Bridge sends every transcript turn that target has not seen since it was last advised.
 
@@ -49,6 +55,7 @@ Lobo, please respond to Christopher and Gemini. Agree, disagree, refine the plan
 
 - Does not scrape full conversations
 - The side panel conversation view only stores snippets you explicitly pass or type
+- Only conversations assigned as Lobo or Gemini in the active council session participate
 - Side panel send/pass actions try to click send
 - Auto-submit depends on finding an enabled send button
 - Refresh replies uses best-effort selectors for the latest visible ChatGPT and Gemini response

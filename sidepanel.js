@@ -2,13 +2,19 @@ const STORAGE_KEYS = {
   capturedText: "capturedText",
   turns: "conversationTurns",
   draft: "composerDraft",
-  deliveryState: "deliveryState"
+  deliveryState: "deliveryState",
+  session: "councilSession"
 };
 
 const MAX_TURNS = 80;
+const REPLY_WATCH_INTERVAL_MS = 1000;
+const REPLY_WATCH_STABLE_MS = 2000;
+const REPLY_WATCH_TIMEOUT_MS = 120000;
+const REPLY_WATCH_MIN_LENGTH = 20;
 
 const TARGETS = {
   gemini: {
+    key: "gemini",
     urlPattern: "https://gemini.google.com/*",
     openUrl: "https://gemini.google.com/",
     label: "Gemini",
@@ -25,6 +31,7 @@ ${formatTurnsForPrompt(turnsToSend)}
 Gemini, please respond to Christopher and Lobo with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`
   },
   chatgpt: {
+    key: "chatgpt",
     urlPattern: "https://chatgpt.com/*",
     openUrl: "https://chatgpt.com/",
     label: "ChatGPT",
@@ -52,12 +59,19 @@ const sendComposerToGeminiButton = document.getElementById("sendComposerToGemini
 const sendComposerToBothButton = document.getElementById("sendComposerToBoth");
 const sendComposerToChatGPTButton = document.getElementById("sendComposerToChatGPT");
 const clearConversationButton = document.getElementById("clearConversation");
+const sessionSummaryEl = document.getElementById("sessionSummary");
+const setActiveAsChatGPTButton = document.getElementById("setActiveAsChatGPT");
+const setActiveAsGeminiButton = document.getElementById("setActiveAsGemini");
+const removeActiveFromCouncilButton = document.getElementById("removeActiveFromCouncil");
+const toggleCapturePauseButton = document.getElementById("toggleCapturePause");
 
 let turns = [];
 let deliveryState = {
   ChatGPT: 0,
   Gemini: 0
 };
+let councilSession = normalizeCouncilSession();
+const replyWatchers = new Map();
 
 document.addEventListener("DOMContentLoaded", loadPanelState);
 passSelectionButton.addEventListener("click", passSelectionToOtherAi);
@@ -67,6 +81,10 @@ sendComposerToGeminiButton.addEventListener("click", () => sendComposerToTarget(
 sendComposerToBothButton.addEventListener("click", sendComposerToBoth);
 sendComposerToChatGPTButton.addEventListener("click", () => sendComposerToTarget(TARGETS.chatgpt));
 clearConversationButton.addEventListener("click", clearConversation);
+setActiveAsChatGPTButton.addEventListener("click", () => setActiveTabAsCouncilMember(TARGETS.chatgpt));
+setActiveAsGeminiButton.addEventListener("click", () => setActiveTabAsCouncilMember(TARGETS.gemini));
+removeActiveFromCouncilButton.addEventListener("click", removeActiveTabFromCouncil);
+toggleCapturePauseButton.addEventListener("click", toggleCapturePause);
 composerTextEl.addEventListener("input", saveDraft);
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -74,7 +92,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     return;
   }
 
-  if (!changes[STORAGE_KEYS.turns] && !changes[STORAGE_KEYS.deliveryState]) {
+  if (!changes[STORAGE_KEYS.turns] && !changes[STORAGE_KEYS.deliveryState] && !changes[STORAGE_KEYS.session]) {
     return;
   }
 
@@ -86,29 +104,37 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     deliveryState = normalizeDeliveryState(changes[STORAGE_KEYS.deliveryState].newValue);
   }
 
+  if (changes[STORAGE_KEYS.session]) {
+    councilSession = normalizeCouncilSession(changes[STORAGE_KEYS.session].newValue);
+  }
+
   renderTurns();
+  renderCouncilSession();
 });
 
 async function loadPanelState() {
   const stored = await chrome.storage.local.get([
     STORAGE_KEYS.turns,
     STORAGE_KEYS.draft,
-    STORAGE_KEYS.deliveryState
+    STORAGE_KEYS.deliveryState,
+    STORAGE_KEYS.session
   ]);
 
   turns = stored[STORAGE_KEYS.turns] || [];
   deliveryState = normalizeDeliveryState(stored[STORAGE_KEYS.deliveryState]);
+  councilSession = normalizeCouncilSession(stored[STORAGE_KEYS.session]);
   composerTextEl.value = stored[STORAGE_KEYS.draft] || "";
   renderTurns();
+  renderCouncilSession();
 }
 
 async function passSelectionToOtherAi() {
   try {
     const activeTab = await getActiveTab();
-    const source = getSourceFromUrl(activeTab?.url || "");
+    const source = getCouncilSourceFromTab(activeTab);
 
     if (!source) {
-      setStatus("Open ChatGPT or Gemini first.");
+      setStatus("Assign this ChatGPT or Gemini tab to the council first.");
       return;
     }
 
@@ -119,7 +145,7 @@ async function passSelectionToOtherAi() {
       return;
     }
 
-    const target = source.label === "ChatGPT" ? TARGETS.gemini : TARGETS.chatgpt;
+    const target = source.key === "chatgpt" ? TARGETS.gemini : TARGETS.chatgpt;
     await chrome.storage.local.set({ [STORAGE_KEYS.capturedText]: selectedText });
     await appendTurn({
       speaker: source.label,
@@ -135,10 +161,10 @@ async function passSelectionToOtherAi() {
 async function addSelectionToConversation() {
   try {
     const activeTab = await getActiveTab();
-    const source = getSourceFromUrl(activeTab?.url || "");
+    const source = getCouncilSourceFromTab(activeTab);
 
     if (!source) {
-      setStatus("Open ChatGPT or Gemini first.");
+      setStatus("Assign this ChatGPT or Gemini tab to the council first.");
       return;
     }
 
@@ -181,14 +207,11 @@ async function refreshLatestReplies() {
 }
 
 async function captureLatestReplyFromTarget(target) {
-  const tabs = await chrome.tabs.query({ url: target.urlPattern });
-
-  if (tabs.length === 0) {
+  if (councilSession.paused) {
     return false;
   }
 
-  const response = await sendMessageWithFallback(tabs[0].id, { type: "GET_LATEST_REPLY" });
-  const text = response?.text || "";
+  const text = await getLatestReplyTextFromTarget(target);
 
   if (!text.trim()) {
     return false;
@@ -276,13 +299,19 @@ async function sendComposerToBoth() {
 
 async function sendToTarget(target) {
   const turnsToSend = getUnseenTurnsForTarget(target);
+  const tab = await getCouncilTabForTarget(target);
+
+  if (!tab) {
+    setStatus(`Set a council tab for ${target.label} first.`);
+    return false;
+  }
 
   if (turnsToSend.length === 0) {
     setStatus(`${target.label} is already caught up.`);
     return true;
   }
 
-  const tab = await findOrCreateTab(target);
+  const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
   await waitForTabReady(tab.id);
 
   const prompt = target.wrapTurns(turnsToSend);
@@ -293,6 +322,9 @@ async function sendToTarget(target) {
 
   if (response?.ok && response?.submitted) {
     await markTargetAdvised(target, turnsToSend);
+    if (!councilSession.paused) {
+      startReplyWatcher(target, latestReplyBeforeSend);
+    }
     setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${target.label}.`);
     return true;
   }
@@ -305,6 +337,9 @@ async function sendToTarget(target) {
 
   if (response?.ok && response?.submitted) {
     await markTargetAdvised(target, turnsToSend);
+    if (!councilSession.paused) {
+      startReplyWatcher(target, latestReplyBeforeSend);
+    }
     setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${target.label}.`);
     return true;
   }
@@ -339,6 +374,83 @@ async function appendTurn(turn, options = {}) {
   renderTurns();
   await chrome.storage.local.set({ [STORAGE_KEYS.turns]: nextTurns });
   return true;
+}
+
+function startReplyWatcher(target, baselineText) {
+  stopReplyWatcher(target.label);
+
+  const watcher = {
+    baselineSignature: getReplySignature(baselineText),
+    candidateSignature: "",
+    candidateText: "",
+    candidateSince: 0,
+    startedAt: Date.now(),
+    timeoutId: null
+  };
+
+  replyWatchers.set(target.label, watcher);
+
+  async function tick() {
+    if (replyWatchers.get(target.label) !== watcher) {
+      return;
+    }
+
+    if (Date.now() - watcher.startedAt > REPLY_WATCH_TIMEOUT_MS) {
+      stopReplyWatcher(target.label);
+      return;
+    }
+
+    try {
+      const text = await getLatestReplyTextFromTarget(target);
+      const signature = getReplySignature(text);
+      const duplicate = isDuplicateTurn({ speaker: target.label, text });
+
+      if (
+        text.length >= REPLY_WATCH_MIN_LENGTH &&
+        signature &&
+        signature !== watcher.baselineSignature
+      ) {
+        if (duplicate) {
+          stopReplyWatcher(target.label);
+          return;
+        }
+
+        if (signature !== watcher.candidateSignature) {
+          watcher.candidateSignature = signature;
+          watcher.candidateText = text;
+          watcher.candidateSince = Date.now();
+        } else if (Date.now() - watcher.candidateSince >= REPLY_WATCH_STABLE_MS) {
+          const added = await appendTurn({
+            speaker: target.label,
+            text: watcher.candidateText,
+            target: ""
+          });
+          stopReplyWatcher(target.label);
+
+          if (added) {
+            setStatus(`Added completed ${target.label} reply.`);
+          }
+          return;
+        }
+      }
+    } catch (error) {
+      // The target tab may still be loading or throttled; keep watching until timeout.
+    }
+
+    watcher.timeoutId = window.setTimeout(tick, REPLY_WATCH_INTERVAL_MS);
+  }
+
+  watcher.timeoutId = window.setTimeout(tick, REPLY_WATCH_INTERVAL_MS);
+}
+
+function stopReplyWatcher(label) {
+  const watcher = replyWatchers.get(label);
+
+  if (watcher?.timeoutId) {
+    window.clearTimeout(watcher.timeoutId);
+  }
+
+  replyWatchers.delete(label);
 }
 
 function getUnseenTurnsForTarget(target) {
@@ -434,6 +546,10 @@ function normalizeText(text) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function getReplySignature(text) {
+  return normalizeText(text);
+}
+
 function renderTurns() {
   turnsEl.replaceChildren();
 
@@ -506,6 +622,139 @@ function padDatePart(value, length) {
   return String(value).padStart(length, "0");
 }
 
+function normalizeCouncilSession(value) {
+  const createdAt = normalizeTimestamp(value?.createdAt);
+
+  return {
+    sessionId: value?.sessionId || `council_${createdAt}`,
+    title: value?.title || "Council Bridge",
+    createdAt,
+    paused: Boolean(value?.paused),
+    members: {
+      chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
+      gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
+    }
+  };
+}
+
+function normalizeCouncilMember(member, key) {
+  const conversationId = member?.conversationId || extractConversationId(member?.url || "", key);
+
+  if (!member || !conversationId) {
+    return null;
+  }
+
+  return {
+    conversationId,
+    currentTabId: Number.isInteger(member.currentTabId) ? member.currentTabId : member.tabId,
+    currentWindowId: Number.isInteger(member.currentWindowId) ? member.currentWindowId : member.windowId,
+    url: member.url || "",
+    displayName: member.displayName || "",
+    role: member.role || "agent",
+    status: member.status || "connected",
+    assignedAt: Number(member.assignedAt) || Date.now()
+  };
+}
+
+async function setActiveTabAsCouncilMember(target) {
+  const activeTab = await getActiveTab();
+
+  if (!activeTab?.id || !activeTab.url?.startsWith(target.openUrl)) {
+    setStatus(`Open the ${target.label} tab you want in the council first.`);
+    return;
+  }
+
+  const conversationId = extractConversationId(activeTab.url, target.key);
+
+  if (!conversationId) {
+    setStatus(`${target.label} needs an active conversation URL before it can join the council.`);
+    return;
+  }
+
+  councilSession = {
+    ...councilSession,
+    members: {
+      ...councilSession.members,
+      [target.key]: {
+        conversationId,
+        currentTabId: activeTab.id,
+        currentWindowId: activeTab.windowId,
+        url: activeTab.url,
+        displayName: target.label,
+        role: "agent",
+        status: "connected",
+        assignedAt: Date.now()
+      }
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus(`Set this tab as ${target.label}.`);
+}
+
+async function removeActiveTabFromCouncil() {
+  const activeTab = await getActiveTab();
+  const memberKey = getCouncilMemberKeyForTab(activeTab, { allowStale: true });
+
+  if (!memberKey) {
+    setStatus("This tab is not in the active council.");
+    return;
+  }
+
+  stopReplyWatcher(TARGETS[memberKey].label);
+  councilSession = {
+    ...councilSession,
+    members: {
+      ...councilSession.members,
+      [memberKey]: null
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus(`Removed ${TARGETS[memberKey].label} from the council.`);
+}
+
+async function toggleCapturePause() {
+  councilSession = {
+    ...councilSession,
+    paused: !councilSession.paused
+  };
+
+  if (councilSession.paused) {
+    for (const label of Array.from(replyWatchers.keys())) {
+      stopReplyWatcher(label);
+    }
+  }
+
+  await saveCouncilSession();
+  setStatus(councilSession.paused ? "Capture paused." : "Capture resumed.");
+}
+
+async function saveCouncilSession() {
+  councilSession = normalizeCouncilSession(councilSession);
+  await chrome.storage.local.set({ [STORAGE_KEYS.session]: councilSession });
+  renderCouncilSession();
+}
+
+function renderCouncilSession() {
+  const lobo = formatCouncilMember(councilSession.members.chatgpt, "not set");
+  const gemini = formatCouncilMember(councilSession.members.gemini, "not set");
+  const state = councilSession.paused ? "paused" : "active";
+
+  sessionSummaryEl.textContent = `Council capture: ${state}
+Lobo: ${lobo}
+Gemini: ${gemini}`;
+  toggleCapturePauseButton.textContent = councilSession.paused ? "Resume capture" : "Pause capture";
+}
+
+function formatCouncilMember(member, fallback) {
+  if (!member) {
+    return fallback;
+  }
+
+  return `${member.status}; ${shortenId(member.conversationId)}; tab ${member.currentTabId || "?"}`;
+}
+
 async function clearConversation() {
   if (!window.confirm("Clear the Council Bridge conversation view?")) {
     return;
@@ -535,26 +784,166 @@ async function captureTextFromTab(tab) {
   return response?.text || "";
 }
 
-function getSourceFromUrl(url) {
-  if (url.startsWith("https://chatgpt.com/")) {
-    return { label: "ChatGPT", promptLabel: "ChatGPT / Lobo" };
+async function getLatestReplyTextFromTarget(target) {
+  const tab = await getCouncilTabForTarget(target);
+
+  if (!tab) {
+    return "";
   }
 
-  if (url.startsWith("https://gemini.google.com/")) {
-    return { label: "Gemini", promptLabel: "Gemini" };
-  }
-
-  return null;
+  const response = await sendMessageWithFallback(tab.id, { type: "GET_LATEST_REPLY" });
+  return response?.text || "";
 }
 
-async function findOrCreateTab(target) {
-  const tabs = await chrome.tabs.query({ url: target.urlPattern });
+function getCouncilSourceFromTab(tab) {
+  const memberKey = getCouncilMemberKeyForTab(tab);
 
-  if (tabs.length > 0) {
-    return tabs[0];
+  if (!memberKey) {
+    return null;
   }
 
-  return chrome.tabs.create({ url: target.openUrl, active: false });
+  const target = TARGETS[memberKey];
+  return { key: target.key, label: target.label };
+}
+
+function getCouncilMemberKeyForTab(tab, options = {}) {
+  if (!tab?.id || !tab.url) {
+    return "";
+  }
+
+  return Object.keys(TARGETS).find((key) => {
+    const member = councilSession.members[key];
+    return tabMatchesCouncilMember(tab, member, TARGETS[key], {
+      allowRoutingMismatch: true,
+      allowStale: options.allowStale === true
+    });
+  }) || "";
+}
+
+async function getCouncilTabForTarget(target) {
+  const member = councilSession.members[target.key];
+
+  if (!member) {
+    return null;
+  }
+
+  try {
+    if (member.status !== "stale" && Number.isInteger(member.currentTabId)) {
+      const tab = await chrome.tabs.get(member.currentTabId);
+
+      if (tabMatchesCouncilMember(tab, member, target)) {
+        return tab;
+      }
+
+      await markMemberStaleIfNavigatedOut(target, tab);
+    }
+  } catch (error) {
+    // The stored routing tab may be gone; scan open tabs below and auto-heal if possible.
+  }
+
+  return healCouncilMemberFromOpenTabs(target, member);
+}
+
+function tabMatchesCouncilMember(tab, member, target, options = {}) {
+  const conversationId = extractConversationId(tab?.url || "", target.key);
+
+  return (
+    Boolean(tab?.id) &&
+    Boolean(member) &&
+    (options.allowStale || member.status !== "stale") &&
+    tab.url?.startsWith(target.openUrl) &&
+    conversationId &&
+    conversationId === member.conversationId &&
+    (
+      options.allowRoutingMismatch ||
+      (tab.id === member.currentTabId && tab.windowId === member.currentWindowId)
+    )
+  );
+}
+
+async function healCouncilMemberFromOpenTabs(target, member) {
+  const tabs = await chrome.tabs.query({ url: target.urlPattern });
+  const matchingTab = tabs.find((tab) => tabMatchesCouncilMember(tab, member, target, {
+    allowRoutingMismatch: true,
+    allowStale: true
+  }));
+
+  if (!matchingTab) {
+    return null;
+  }
+
+  councilSession = {
+    ...councilSession,
+    members: {
+      ...councilSession.members,
+      [target.key]: {
+        ...member,
+        currentTabId: matchingTab.id,
+        currentWindowId: matchingTab.windowId,
+        url: matchingTab.url,
+        status: "connected"
+      }
+    }
+  };
+  await saveCouncilSession();
+  console.info(`[CouncilBridge][SESSION_AUTO_HEALED] role=${target.key} newTabId=${matchingTab.id}`);
+
+  return matchingTab;
+}
+
+async function markMemberStaleIfNavigatedOut(target, tab) {
+  const member = councilSession.members[target.key];
+
+  if (!member || !tab?.url?.startsWith(target.openUrl)) {
+    return;
+  }
+
+  const conversationId = extractConversationId(tab.url, target.key);
+
+  if (conversationId !== member.conversationId) {
+    councilSession = {
+      ...councilSession,
+      members: {
+        ...councilSession.members,
+        [target.key]: {
+          ...member,
+          status: "stale",
+          url: tab.url,
+          currentTabId: tab.id,
+          currentWindowId: tab.windowId
+        }
+      }
+    };
+    await saveCouncilSession();
+    console.info(`[CouncilBridge][TAB_NAVIGATED_OUT] role=${target.key} tabId=${tab.id}`);
+  }
+}
+
+function extractConversationId(url, key) {
+  try {
+    const parsed = new URL(url);
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+
+    if (key === "chatgpt" && pathParts[0] === "c" && pathParts[1]) {
+      return pathParts[1];
+    }
+
+    if (key === "gemini" && pathParts[0] === "app" && pathParts[1]) {
+      return pathParts[1];
+    }
+
+    return "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function shortenId(value) {
+  if (!value) {
+    return "no conversation";
+  }
+
+  return value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
 }
 
 async function focusTab(tab) {

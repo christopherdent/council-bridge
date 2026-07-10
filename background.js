@@ -1,8 +1,19 @@
 const STORAGE_KEYS = {
-  turns: "conversationTurns"
+  turns: "conversationTurns",
+  session: "councilSession"
 };
 
 const MAX_TURNS = 80;
+const TARGETS = {
+  chatgpt: {
+    label: "ChatGPT",
+    openUrl: "https://chatgpt.com/"
+  },
+  gemini: {
+    label: "Gemini",
+    openUrl: "https://gemini.google.com/"
+  }
+};
 
 let appendQueue = Promise.resolve();
 
@@ -22,6 +33,16 @@ chrome.action.onClicked.addListener(async (tab) => {
   await chrome.sidePanel.open({ windowId: tab.windowId });
 });
 
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+  if (!changeInfo.url && changeInfo.status !== "complete") {
+    return;
+  }
+
+  reconcileCouncilTab(tab).catch((error) => {
+    console.warn(`[CouncilBridge][SESSION_RECOVERY_FAILED] error=${error?.message || "Unknown error"}`);
+  });
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "AI_REPLY_READY") {
     return;
@@ -38,14 +59,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function appendAutomaticReply(message, sender) {
-  const speaker = getSpeaker(message, sender);
   const text = normalizeReplyText(message.text || "");
 
-  if (!speaker || text.length === 0) {
+  if (text.length === 0) {
     return { ok: false, added: false };
   }
 
-  const stored = await chrome.storage.local.get(STORAGE_KEYS.turns);
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEYS.turns,
+    STORAGE_KEYS.session
+  ]);
+  const session = await reconcileCouncilTab(sender?.tab, stored[STORAGE_KEYS.session]);
+  const membership = getCouncilMembership(session, sender);
+
+  if (!membership.ok) {
+    console.info(`[CouncilBridge][IGNORED_NON_COUNCIL_TAB] reason=${membership.reason}`);
+    return { ok: true, added: false, reason: membership.reason };
+  }
+
+  if (membership.session.paused) {
+    console.info("[CouncilBridge][IGNORED_CAPTURE_PAUSED]");
+    return { ok: true, added: false, reason: "paused" };
+  }
+
+  const speaker = membership.speaker;
   const turns = Array.isArray(stored[STORAGE_KEYS.turns]) ? stored[STORAGE_KEYS.turns] : [];
 
   if (isDuplicateTurn(turns, speaker, text)) {
@@ -68,18 +105,137 @@ async function appendAutomaticReply(message, sender) {
   return { ok: true, added: true };
 }
 
-function getSpeaker(message, sender) {
-  const url = sender?.tab?.url || sender?.url || "";
+function getCouncilMembership(rawSession, sender) {
+  const session = normalizeCouncilSession(rawSession);
+  const tabId = sender?.tab?.id;
 
-  if (url.startsWith("https://chatgpt.com/")) {
-    return "ChatGPT";
+  if (!Number.isInteger(tabId)) {
+    return { ok: false, reason: "missing-tab", session };
   }
 
-  if (url.startsWith("https://gemini.google.com/")) {
-    return "Gemini";
+  for (const [key, target] of Object.entries(TARGETS)) {
+    const member = session.members[key];
+
+    if (member?.currentTabId === tabId && member.status !== "stale") {
+      return { ok: true, speaker: target.label, session };
+    }
   }
 
-  return ["ChatGPT", "Gemini"].includes(message.speaker) ? message.speaker : "";
+  return { ok: false, reason: `tab-${tabId}-not-in-council`, session };
+}
+
+function normalizeCouncilSession(value) {
+  return {
+    paused: Boolean(value?.paused),
+    members: {
+      chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
+      gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
+    }
+  };
+}
+
+function normalizeCouncilMember(member, key) {
+  const conversationId = member?.conversationId || extractConversationId(member?.url || "", key);
+
+  if (!member || !conversationId) {
+    return null;
+  }
+
+  return {
+    conversationId,
+    currentTabId: Number.isInteger(member.currentTabId) ? member.currentTabId : member.tabId,
+    currentWindowId: Number.isInteger(member.currentWindowId) ? member.currentWindowId : member.windowId,
+    url: member.url || "",
+    status: member.status || "connected"
+  };
+}
+
+async function reconcileCouncilTab(tab, rawSession) {
+  if (!tab?.url) {
+    return normalizeCouncilSession(rawSession);
+  }
+
+  const stored = rawSession === undefined
+    ? await chrome.storage.local.get(STORAGE_KEYS.session)
+    : { [STORAGE_KEYS.session]: rawSession };
+  const session = normalizeCouncilSession(stored[STORAGE_KEYS.session]);
+  const nextSession = reconcileCouncilTabInSession(session, tab);
+
+  if (nextSession !== session) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.session]: nextSession });
+    return nextSession;
+  }
+
+  return session;
+}
+
+function reconcileCouncilTabInSession(session, tab) {
+  let changed = false;
+  const nextMembers = { ...session.members };
+
+  for (const [key, target] of Object.entries(TARGETS)) {
+    const member = session.members[key];
+
+    if (!member || !tab.url?.startsWith(target.openUrl)) {
+      continue;
+    }
+
+    const conversationId = extractConversationId(tab.url, key);
+
+    if (conversationId === member.conversationId) {
+      if (
+        member.currentTabId !== tab.id ||
+        member.currentWindowId !== tab.windowId ||
+        member.status !== "connected" ||
+        member.url !== tab.url
+      ) {
+        nextMembers[key] = {
+          ...member,
+          currentTabId: tab.id,
+          currentWindowId: tab.windowId,
+          url: tab.url,
+          status: "connected"
+        };
+        changed = true;
+        console.info(`[CouncilBridge][SESSION_AUTO_HEALED] role=${key} newTabId=${tab.id}`);
+      }
+
+      continue;
+    }
+
+    if (member.currentTabId === tab.id && member.status !== "stale") {
+      nextMembers[key] = {
+        ...member,
+        currentTabId: tab.id,
+        currentWindowId: tab.windowId,
+        url: tab.url,
+        status: "stale"
+      };
+      changed = true;
+      console.info(`[CouncilBridge][TAB_NAVIGATED_OUT] role=${key} tabId=${tab.id}`);
+    }
+  }
+
+  return changed ? { ...session, members: nextMembers } : session;
+}
+
+function extractConversationId(url, key) {
+  try {
+    const parsed = new URL(url);
+    const pathParts = parsed.pathname.split("/").filter(Boolean);
+
+    if (key === "chatgpt" && pathParts[0] === "c" && pathParts[1]) {
+      return pathParts[1];
+    }
+
+    if (key === "gemini" && pathParts[0] === "app" && pathParts[1]) {
+      return pathParts[1];
+    }
+
+    return "";
+  } catch (error) {
+    return "";
+  }
 }
 
 function isDuplicateTurn(turns, speaker, text) {
