@@ -16,6 +16,9 @@ const TARGETS = {
 };
 
 let appendQueue = Promise.resolve();
+const windowInjectionLocks = new Map();
+const pendingLockReleases = new Map();
+let injectionLockIdCounter = 0;
 
 chrome.runtime.onInstalled.addListener(() => {
   if (!chrome.sidePanel?.setPanelBehavior) {
@@ -54,7 +57,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "RESTORE_TAB_AFTER_INJECTION") {
-    restoreTabAfterInjection(message.tabId)
+    restoreTabAfterInjection(message.tabId, message.windowId, message.lockId)
       .then(sendResponse)
       .catch((error) => {
         sendResponse({ ok: false, error: error?.message || "Unknown error" });
@@ -62,18 +65,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type !== "AI_REPLY_READY") {
-    return;
+  if (message?.type === "AI_REPLY_READY") {
+    appendQueue = appendQueue
+      .then(() => appendAutomaticReply(message, sender))
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Unknown error" });
+      });
+    return true;
   }
 
-  appendQueue = appendQueue
-    .then(() => appendAutomaticReply(message, sender))
-    .then(sendResponse)
-    .catch((error) => {
-      sendResponse({ ok: false, error: error?.message || "Unknown error" });
-    });
-
-  return true;
+  if (message?.type === "WATCHER_REPLY_READY") {
+    appendQueue = appendQueue
+      .then(() => appendWatcherReply(message))
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Unknown error" });
+      });
+    return true;
+  }
 });
 
 async function wakeTabForInjection(tabId) {
@@ -87,34 +97,78 @@ async function wakeTabForInjection(tabId) {
     return { ok: true, activated: false };
   }
 
-  const [previousActiveTab] = await chrome.tabs.query({
-    active: true,
-    windowId: targetTab.windowId
-  });
+  const windowId = targetTab.windowId;
 
-  await chrome.tabs.update(tabId, { active: true });
-  await waitForTabReady(tabId);
-  console.info(`[CouncilBridge][TAB_WOKEN_FOR_INJECTION] tabId=${tabId} previousTabId=${previousActiveTab?.id || ""}`);
-
-  return {
-    ok: true,
-    activated: true,
-    previousTabId: previousActiveTab?.id
-  };
-}
-
-async function restoreTabAfterInjection(tabId) {
-  if (!Number.isInteger(tabId)) {
-    return { ok: false, error: "Missing tabId" };
-  }
+  // Only one tab activation cycle may run at a time per window, so two concurrent
+  // sends targeting tabs in the same window don't stomp on each other's
+  // "which tab was active before we started" bookkeeping. Different windows proceed
+  // fully in parallel since chrome.tabs.update({active:true}) is per-window. Each
+  // acquisition gets its own lockId so a later acquire for the same window can never
+  // release a lock it doesn't own.
+  const lockId = await acquireWindowInjectionLock(windowId);
 
   try {
+    const [previousActiveTab] = await chrome.tabs.query({
+      active: true,
+      windowId
+    });
+
+    await chrome.tabs.update(tabId, { active: true });
+    await waitForTabReady(tabId);
+    console.info(`[CouncilBridge][TAB_WOKEN_FOR_INJECTION] tabId=${tabId} previousTabId=${previousActiveTab?.id || ""}`);
+
+    return {
+      ok: true,
+      activated: true,
+      previousTabId: previousActiveTab?.id,
+      windowId,
+      lockId
+    };
+  } catch (error) {
+    releaseWindowInjectionLock(windowId, lockId);
+    throw error;
+  }
+}
+
+async function restoreTabAfterInjection(tabId, windowId, lockId) {
+  try {
+    if (!Number.isInteger(tabId)) {
+      return { ok: false, error: "Missing tabId" };
+    }
+
     const tab = await chrome.tabs.get(tabId);
     await chrome.tabs.update(tabId, { active: true });
     console.info(`[CouncilBridge][TAB_RESTORED_AFTER_INJECTION] tabId=${tabId}`);
     return { ok: true, windowId: tab.windowId };
   } catch (error) {
     return { ok: false, error: error?.message || "Unknown error" };
+  } finally {
+    if (Number.isInteger(windowId) && Number.isInteger(lockId)) {
+      releaseWindowInjectionLock(windowId, lockId);
+    }
+  }
+}
+
+function acquireWindowInjectionLock(windowId) {
+  const previous = windowInjectionLocks.get(windowId) || Promise.resolve();
+  const lockId = ++injectionLockIdCounter;
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+
+  windowInjectionLocks.set(windowId, previous.then(() => held));
+  pendingLockReleases.set(lockId, release);
+
+  return previous.then(() => lockId);
+}
+
+function releaseWindowInjectionLock(windowId, lockId) {
+  const release = pendingLockReleases.get(lockId);
+
+  if (release) {
+    pendingLockReleases.delete(lockId);
+    release();
   }
 }
 
@@ -163,19 +217,59 @@ async function appendAutomaticReply(message, sender) {
     return { ok: true, added: false, reason: membership.reason };
   }
 
-  if (membership.session.paused) {
+  const turns = Array.isArray(stored[STORAGE_KEYS.turns]) ? stored[STORAGE_KEYS.turns] : [];
+
+  return commitReply({
+    turns,
+    session: membership.session,
+    speaker: membership.speaker,
+    text,
+    completedAt: message.completedAt
+  });
+}
+
+async function appendWatcherReply(message) {
+  const text = normalizeReplyText(message.text || "");
+  const target = TARGETS[message.targetKey];
+
+  if (text.length === 0 || !target) {
+    return { ok: false, added: false };
+  }
+
+  const stored = await chrome.storage.local.get([
+    STORAGE_KEYS.turns,
+    STORAGE_KEYS.session
+  ]);
+  const session = normalizeCouncilSession(stored[STORAGE_KEYS.session]);
+  const member = session.members[message.targetKey];
+
+  if (!member || member.status === "stale") {
+    console.info(`[CouncilBridge][IGNORED_WATCHER_REPLY] reason=no-council-member targetKey=${message.targetKey}`);
+    return { ok: true, added: false, reason: "no-council-member" };
+  }
+
+  const turns = Array.isArray(stored[STORAGE_KEYS.turns]) ? stored[STORAGE_KEYS.turns] : [];
+
+  return commitReply({
+    turns,
+    session,
+    speaker: target.label,
+    text,
+    completedAt: message.completedAt
+  });
+}
+
+async function commitReply({ turns, session, speaker, text, completedAt }) {
+  if (session.paused) {
     console.info("[CouncilBridge][IGNORED_CAPTURE_PAUSED]");
     return { ok: true, added: false, reason: "paused" };
   }
-
-  const speaker = membership.speaker;
-  const turns = Array.isArray(stored[STORAGE_KEYS.turns]) ? stored[STORAGE_KEYS.turns] : [];
 
   if (isDuplicateTurn(turns, speaker, text)) {
     return { ok: true, added: false };
   }
 
-  const createdAt = normalizeTimestamp(message.completedAt);
+  const createdAt = normalizeTimestamp(completedAt);
   const nextTurns = [
     ...turns,
     {

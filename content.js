@@ -16,7 +16,7 @@ if (!window.__councilBridgeContentLoaded) {
     }
 
     if (message?.type === "GET_LATEST_REPLY") {
-      sendResponse({ text: getLatestVisibleReply() });
+      sendResponse({ text: getLatestVisibleReply(), isStreaming: isReplyStillStreaming() });
       return;
     }
 
@@ -101,8 +101,9 @@ function getLatestVisibleReply() {
   const candidates = Array.from(new Set(
     selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)))
   ));
+  const promptBox = findVisiblePromptBox();
   const replies = candidates
-    .filter(isVisibleReplyCandidate)
+    .filter((element) => isVisibleReplyCandidate(element, promptBox))
     .map((element) => ({
       text: normalizeReplyText(element.innerText || element.textContent || ""),
       element
@@ -210,8 +211,8 @@ function getReplySignature(text) {
   return normalizeReplyText(text).replace(/\s+/g, " ").trim();
 }
 
-function isVisibleReplyCandidate(element) {
-  if (!isVisiblePromptCandidate(element) || findVisiblePromptBox()?.contains(element)) {
+function isVisibleReplyCandidate(element, promptBox) {
+  if (!isVisiblePromptCandidate(element) || promptBox?.contains(element)) {
     return false;
   }
 

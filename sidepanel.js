@@ -7,8 +7,9 @@ const STORAGE_KEYS = {
 };
 
 const MAX_TURNS = 80;
-const REPLY_WATCH_INTERVAL_MS = 1000;
+const REPLY_WATCH_INTERVAL_MS = 500;
 const REPLY_WATCH_STABLE_MS = 2000;
+const STREAM_CONFIRMED_STABLE_MS = 1200;
 const REPLY_WATCH_TIMEOUT_MS = 120000;
 const REPLY_WATCH_MIN_LENGTH = 20;
 
@@ -70,6 +71,9 @@ let deliveryState = {
 };
 let councilSession = normalizeCouncilSession();
 const replyWatchers = new Map();
+let deliveryWriteQueue = Promise.resolve();
+
+let renderedTurnIds = new Set();
 
 document.addEventListener("DOMContentLoaded", loadPanelState);
 passSelectionButton.addEventListener("click", passSelectionToOtherAi);
@@ -104,7 +108,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     councilSession = normalizeCouncilSession(changes[STORAGE_KEYS.session].newValue);
   }
 
-  renderTurns();
+  reconcileRenderedTurns();
   renderCouncilSession();
 });
 
@@ -120,7 +124,7 @@ async function loadPanelState() {
   deliveryState = normalizeDeliveryState(stored[STORAGE_KEYS.deliveryState]);
   councilSession = normalizeCouncilSession(stored[STORAGE_KEYS.session]);
   composerTextEl.value = stored[STORAGE_KEYS.draft] || "";
-  renderTurns();
+  revealAllTurnsImmediately();
   renderCouncilSession();
 }
 
@@ -276,8 +280,10 @@ async function sendComposerToBoth(text) {
       allowDuplicate: true
     });
 
-    const geminiSent = await sendToTarget(TARGETS.gemini);
-    const chatgptSent = await sendToTarget(TARGETS.chatgpt);
+    const [geminiSent, chatgptSent] = await Promise.all([
+      sendToTarget(TARGETS.gemini),
+      sendToTarget(TARGETS.chatgpt)
+    ]);
 
     if (geminiSent && chatgptSent) {
       setStatus("Sent updates to Gemini and ChatGPT.");
@@ -360,9 +366,9 @@ async function sendToTarget(target) {
     return true;
   }
 
-  const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
   await waitForTabReady(tab.id);
 
+  const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
   const prompt = target.wrapTurns(turnsToSend);
   let response = await insertPromptInTab(tab.id, prompt, {
     showAlerts: false,
@@ -420,7 +426,7 @@ async function appendTurn(turn, options = {}) {
   ].slice(-MAX_TURNS);
 
   turns = nextTurns;
-  renderTurns();
+  reconcileRenderedTurns();
   await chrome.storage.local.set({ [STORAGE_KEYS.turns]: nextTurns });
   return true;
 }
@@ -433,6 +439,7 @@ function startReplyWatcher(target, baselineText) {
     candidateSignature: "",
     candidateText: "",
     candidateSince: 0,
+    candidateConfirmedNotStreaming: false,
     startedAt: Date.now(),
     timeoutId: null
   };
@@ -450,7 +457,7 @@ function startReplyWatcher(target, baselineText) {
     }
 
     try {
-      const text = await getLatestReplyTextFromTarget(target);
+      const { text, isStreaming } = await getLatestReplyStateFromTarget(target);
       const signature = getReplySignature(text);
       const duplicate = isDuplicateTurn({ speaker: target.label, text });
 
@@ -468,18 +475,27 @@ function startReplyWatcher(target, baselineText) {
           watcher.candidateSignature = signature;
           watcher.candidateText = text;
           watcher.candidateSince = Date.now();
-        } else if (Date.now() - watcher.candidateSince >= REPLY_WATCH_STABLE_MS) {
-          const added = await appendTurn({
-            speaker: target.label,
-            text: watcher.candidateText,
-            target: ""
-          });
-          stopReplyWatcher(target.label);
-
-          if (added) {
-            setStatus(`Added completed ${target.label} reply.`);
+          watcher.candidateConfirmedNotStreaming = !isStreaming;
+        } else {
+          if (!isStreaming) {
+            watcher.candidateConfirmedNotStreaming = true;
           }
-          return;
+
+          const requiredStableMs = watcher.candidateConfirmedNotStreaming
+            ? STREAM_CONFIRMED_STABLE_MS
+            : REPLY_WATCH_STABLE_MS;
+
+          if (Date.now() - watcher.candidateSince >= requiredStableMs) {
+            const committed = await commitWatcherReply(target, watcher.candidateText);
+
+            if (committed) {
+              stopReplyWatcher(target.label);
+              setStatus(`Captured completed ${target.label} reply.`);
+              return;
+            }
+
+            watcher.candidateSince = Date.now();
+          }
         }
       }
     } catch (error) {
@@ -490,6 +506,28 @@ function startReplyWatcher(target, baselineText) {
   }
 
   watcher.timeoutId = window.setTimeout(tick, REPLY_WATCH_INTERVAL_MS);
+}
+
+async function commitWatcherReply(target, text) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "WATCHER_REPLY_READY",
+      targetKey: target.key,
+      speaker: target.label,
+      text,
+      completedAt: Date.now()
+    });
+
+    if (response?.ok) {
+      return true;
+    }
+
+    console.warn(`[CouncilBridge][WATCHER_COMMIT_FAILED] target=${target.key} error=${response?.error || "Unknown error"}`);
+    return false;
+  } catch (error) {
+    console.warn(`[CouncilBridge][WATCHER_COMMIT_FAILED] target=${target.key} error=${getErrorMessage(error)}`);
+    return false;
+  }
 }
 
 function stopReplyWatcher(label) {
@@ -517,7 +555,10 @@ async function markTargetAdvised(target, turnsToSend) {
     [target.label]: newestTurnAt
   };
 
-  await chrome.storage.local.set({ [STORAGE_KEYS.deliveryState]: deliveryState });
+  deliveryWriteQueue = deliveryWriteQueue.then(() =>
+    chrome.storage.local.set({ [STORAGE_KEYS.deliveryState]: deliveryState })
+  );
+  await deliveryWriteQueue;
 }
 
 function normalizeDeliveryState(value) {
@@ -599,8 +640,19 @@ function getReplySignature(text) {
   return normalizeText(text);
 }
 
+function reconcileRenderedTurns() {
+  revealAllTurnsImmediately();
+}
+
+function revealAllTurnsImmediately() {
+  renderedTurnIds = new Set(turns.map((turn) => turn.id));
+  renderTurns();
+}
+
 function renderTurns() {
   turnsEl.replaceChildren();
+
+  const visibleTurns = turns.filter((turn) => renderedTurnIds.has(turn.id));
 
   if (turns.length === 0) {
     const emptyEl = document.createElement("p");
@@ -610,7 +662,7 @@ function renderTurns() {
     return;
   }
 
-  for (const turn of turns) {
+  for (const turn of visibleTurns) {
     const turnEl = document.createElement("article");
     turnEl.className = `turn ${turn.speaker.toLowerCase()}`;
 
@@ -811,7 +863,7 @@ async function clearConversation() {
 
   turns = [];
   deliveryState = normalizeDeliveryState();
-  renderTurns();
+  revealAllTurnsImmediately();
   await chrome.storage.local.set({
     [STORAGE_KEYS.turns]: [],
     [STORAGE_KEYS.deliveryState]: deliveryState
@@ -834,14 +886,18 @@ async function captureTextFromTab(tab) {
 }
 
 async function getLatestReplyTextFromTarget(target) {
+  return (await getLatestReplyStateFromTarget(target)).text;
+}
+
+async function getLatestReplyStateFromTarget(target) {
   const tab = await getCouncilTabForTarget(target);
 
   if (!tab) {
-    return "";
+    return { text: "", isStreaming: false };
   }
 
   const response = await sendMessageWithFallback(tab.id, { type: "GET_LATEST_REPLY" });
-  return response?.text || "";
+  return { text: response?.text || "", isStreaming: Boolean(response?.isStreaming) };
 }
 
 function getCouncilSourceFromTab(tab) {
@@ -1061,8 +1117,9 @@ async function insertPromptInTab(tabId, text, options) {
       submit: options?.submit === true
     });
   } finally {
-    if (wakeResponse?.previousTabId && wakeResponse.previousTabId !== tabId) {
-      await restoreTabAfterInjection(wakeResponse.previousTabId);
+    if (wakeResponse?.activated) {
+      const restoreTargetId = wakeResponse.previousTabId ?? tabId;
+      await restoreTabAfterInjection(restoreTargetId, wakeResponse.windowId, wakeResponse.lockId);
     }
   }
 }
@@ -1080,10 +1137,12 @@ async function wakeTabForInjection(tabId) {
   return response;
 }
 
-async function restoreTabAfterInjection(tabId) {
+async function restoreTabAfterInjection(tabId, windowId, lockId) {
   const response = await chrome.runtime.sendMessage({
     type: "RESTORE_TAB_AFTER_INJECTION",
-    tabId
+    tabId,
+    windowId,
+    lockId
   });
 
   if (response?.ok === false) {
