@@ -74,8 +74,6 @@ ${targetName}, please respond to ${getHumanName()} and ${geminiName}. Agree, dis
 const turnsEl = document.getElementById("turns");
 const statusEl = document.getElementById("status");
 const composerTextEl = document.getElementById("composerText");
-const passSelectionButton = document.getElementById("passSelection");
-const addSelectionButton = document.getElementById("addSelection");
 const refreshRepliesButton = document.getElementById("refreshReplies");
 const sendComposerButton = document.getElementById("sendComposer");
 const clearConversationButton = document.getElementById("clearConversation");
@@ -119,8 +117,6 @@ const revealTimers = new Map();
 let nextAssistantRevealAt = 0;
 
 document.addEventListener("DOMContentLoaded", loadPanelState);
-passSelectionButton.addEventListener("click", passSelectionToOtherAi);
-addSelectionButton.addEventListener("click", addSelectionToConversation);
 refreshRepliesButton.addEventListener("click", refreshLatestReplies);
 sendComposerButton.addEventListener("click", sendComposer);
 clearConversationButton.addEventListener("click", clearConversation);
@@ -200,66 +196,6 @@ async function loadPanelState() {
   revealAllTurnsImmediately();
   renderCouncilSession();
   renderHandoffPanel();
-}
-
-async function passSelectionToOtherAi() {
-  try {
-    const activeTab = await getActiveTab();
-    const source = getCouncilSourceFromTab(activeTab);
-
-    if (!source) {
-      setStatus("Assign this ChatGPT or Gemini tab to the council first.");
-      return;
-    }
-
-    const selectedText = await captureTextFromTab(activeTab);
-
-    if (!selectedText.trim()) {
-      setStatus("No selected text found.");
-      return;
-    }
-
-    const target = source.key === "chatgpt" ? TARGETS.gemini : TARGETS.chatgpt;
-    await chrome.storage.local.set({ [STORAGE_KEYS.capturedText]: selectedText });
-    await appendTurn({
-      speaker: source.label,
-      text: selectedText,
-      target: getAgentName(target),
-      recipients: [target.key]
-    });
-    await sendToTarget(target);
-  } catch (error) {
-    setStatus(`Pass failed: ${getErrorMessage(error)}`);
-  }
-}
-
-async function addSelectionToConversation() {
-  try {
-    const activeTab = await getActiveTab();
-    const source = getCouncilSourceFromTab(activeTab);
-
-    if (!source) {
-      setStatus("Assign this ChatGPT or Gemini tab to the council first.");
-      return;
-    }
-
-    const selectedText = await captureTextFromTab(activeTab);
-
-    if (!selectedText.trim()) {
-      setStatus("No selected text found.");
-      return;
-    }
-
-    const added = await appendTurn({
-      speaker: source.label,
-      text: selectedText,
-      target: ""
-    });
-
-    setStatus(added ? `Added ${source.label} selection.` : "That reply is already in the conversation.");
-  } catch (error) {
-    setStatus(`Capture failed: ${getErrorMessage(error)}`);
-  }
 }
 
 async function refreshLatestReplies() {
@@ -2134,11 +2070,6 @@ async function saveDraft() {
 async function getActiveTab() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return activeTab || null;
-}
-
-async function captureTextFromTab(tab) {
-  const response = await sendMessageWithFallback(tab.id, { type: "GET_SELECTION" });
-  return response?.text || "";
 }
 
 async function getLatestReplyTextFromTarget(target) {

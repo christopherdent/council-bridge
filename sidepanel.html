@@ -61,6 +61,12 @@
         gap: 8px;
       }
 
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
       h1 {
         margin: 0;
         font-size: 17px;
@@ -106,19 +112,14 @@
         background: var(--primary-hover);
       }
 
-      .quick-actions {
-        display: grid;
-        grid-template-columns: 1.25fr 1fr 1fr;
-        gap: 6px;
-      }
-
-      .quick-actions button {
-        min-width: 0;
-        padding: 6px 7px;
-        overflow: hidden;
-        font-size: 12px;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+      button.icon-button {
+        display: inline-grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        padding: 0;
+        font-size: 16px;
+        line-height: 1;
       }
 
       .session-panel {
@@ -476,12 +477,10 @@
       <header>
         <div class="topline">
           <h1>Council Bridge</h1>
-          <button id="clearConversation" class="link" type="button">Clear</button>
-        </div>
-        <div class="quick-actions">
-          <button id="passSelection" class="primary" type="button" title="Pass selected reply to the other council member">Pass</button>
-          <button id="addSelection" type="button" title="Add highlighted text from the active council tab">Add</button>
-          <button id="refreshReplies" type="button" title="Capture the latest visible replies from council tabs">Refresh</button>
+          <div class="header-actions">
+            <button id="refreshReplies" class="icon-button" type="button" title="Refresh latest replies" aria-label="Refresh latest replies">&#8635;</button>
+            <button id="clearConversation" class="link" type="button">Clear</button>
+          </div>
         </div>
         <details class="session-panel" aria-label="Council session">
           <summary>Council setup</summary>

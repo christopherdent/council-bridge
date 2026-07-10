@@ -1,8 +1,8 @@
 # Council Bridge
 
-Council Bridge is a tiny Chrome and Edge extension for manually moving highlighted text between ChatGPT and Gemini browser tabs. It captures selected text, tracks the snippets you explicitly add, wraps unseen turns in a direction-specific prompt, inserts them into the target service, and clicks send from the side panel.
+Council Bridge is a tiny Chrome and Edge extension for coordinating assigned ChatGPT and Gemini browser tabs from a persistent side panel. It tracks typed human turns and captured assistant replies, wraps unseen turns in direction-specific prompts, inserts them into the target service, and clicks send from the side panel.
 
-The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows snippets you explicitly pass, selected replies you add, latest replies you refresh, automatically captured completed AI replies, and text you write as yourself. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
+The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows text you write as yourself, latest replies you refresh, and automatically captured completed AI replies. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
 
 It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 
@@ -134,10 +134,6 @@ Completed ChatGPT and Gemini replies are added automatically after their visible
 
 Use `Refresh replies` to manually pull the latest visible reply from both registered council agents. It refreshes ChatGPT and Gemini, not random tabs.
 
-Use `Add selection` to add highlighted text from the active council tab to the side panel without sending it anywhere.
-
-Use `Pass selected reply to other AI` to capture highlighted text from the active council tab and send it to the other registered council agent.
-
 Use `New GPT` or `New Gem` in Council setup when a ChatGPT or Gemini tab gets slow. Council Bridge opens a fresh tab, assigns it as that council member, and seeds it with a bounded recent-context packet so it can rejoin the wider discussion. The seed prompt is intentionally compact; it asks the agent to acknowledge that it is caught up rather than replaying the whole transcript.
 
 ### Pause and Reset
@@ -173,9 +169,9 @@ ChatGPT, please respond to the user and Gemini. Agree, disagree, refine the plan
 ## Known Limitations
 
 - Does not scrape full conversations
-- The side panel conversation view only stores snippets you explicitly pass or type
+- The side panel conversation view only stores typed turns, sent prompts, manually refreshed replies, and automatically captured completed replies
 - Only conversations assigned as ChatGPT or Gemini in the active council session participate
-- Side panel send/pass actions try to click send
+- Side panel send actions try to click send
 - Auto-submit depends on finding an enabled send button
 - Refresh replies uses best-effort selectors for the latest visible ChatGPT and Gemini response
 - Automatic reply capture waits for best-effort response stability and stop-button detection
@@ -187,9 +183,9 @@ ChatGPT, please respond to the user and Gemini. Agree, disagree, refine the plan
 - `manifest.json` defines the Manifest V3 extension, permissions, target hosts, side panel, background worker, and content script.
 - `background.js` opens the side panel when the extension icon is clicked.
 - `sidepanel.html` provides the persistent side panel UI.
-- `sidepanel.js` handles the side panel transcript, unseen-turn batching, typed composer, latest-reply capture, and one-click pass flow.
+- `sidepanel.js` handles the side panel transcript, unseen-turn batching, typed composer, latest-reply capture, handoffs, and roundtable orchestration.
 - `routing.js` contains the shared routing-tag parser used by the side panel and regression tests.
-- `content.js` reads selected text, captures the latest visible reply, and inserts text into visible prompt boxes.
+- `content.js` captures the latest visible reply and inserts text into visible prompt boxes.
 
 ## Tests
 
