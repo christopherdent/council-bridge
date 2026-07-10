@@ -55,9 +55,7 @@ const composerTextEl = document.getElementById("composerText");
 const passSelectionButton = document.getElementById("passSelection");
 const addSelectionButton = document.getElementById("addSelection");
 const refreshRepliesButton = document.getElementById("refreshReplies");
-const sendComposerToGeminiButton = document.getElementById("sendComposerToGemini");
-const sendComposerToBothButton = document.getElementById("sendComposerToBoth");
-const sendComposerToChatGPTButton = document.getElementById("sendComposerToChatGPT");
+const sendComposerButton = document.getElementById("sendComposer");
 const clearConversationButton = document.getElementById("clearConversation");
 const sessionSummaryEl = document.getElementById("sessionSummary");
 const setActiveAsChatGPTButton = document.getElementById("setActiveAsChatGPT");
@@ -77,9 +75,7 @@ document.addEventListener("DOMContentLoaded", loadPanelState);
 passSelectionButton.addEventListener("click", passSelectionToOtherAi);
 addSelectionButton.addEventListener("click", addSelectionToConversation);
 refreshRepliesButton.addEventListener("click", refreshLatestReplies);
-sendComposerToGeminiButton.addEventListener("click", () => sendComposerToTarget(TARGETS.gemini));
-sendComposerToBothButton.addEventListener("click", sendComposerToBoth);
-sendComposerToChatGPTButton.addEventListener("click", () => sendComposerToTarget(TARGETS.chatgpt));
+sendComposerButton.addEventListener("click", sendComposer);
 clearConversationButton.addEventListener("click", clearConversation);
 setActiveAsChatGPTButton.addEventListener("click", () => setActiveTabAsCouncilMember(TARGETS.chatgpt));
 setActiveAsGeminiButton.addEventListener("click", () => setActiveTabAsCouncilMember(TARGETS.gemini));
@@ -224,14 +220,23 @@ async function captureLatestReplyFromTarget(target) {
   });
 }
 
-async function sendComposerToTarget(target) {
-  const text = composerTextEl.value.trim();
+async function sendComposer() {
+  const route = parseComposerRoute(composerTextEl.value);
 
-  if (!text) {
+  if (!route.text) {
     setStatus("Write something first.");
     return;
   }
 
+  if (route.targets.length === 1) {
+    await sendComposerToTarget(route.targets[0], route.text);
+    return;
+  }
+
+  await sendComposerToBoth(route.text);
+}
+
+async function sendComposerToTarget(target, text) {
   try {
     await captureLatestReplyFromTarget(getCounterpartTarget(target));
     await chrome.storage.local.set({
@@ -252,14 +257,7 @@ async function sendComposerToTarget(target) {
   }
 }
 
-async function sendComposerToBoth() {
-  const text = composerTextEl.value.trim();
-
-  if (!text) {
-    setStatus("Write something first.");
-    return;
-  }
-
+async function sendComposerToBoth(text) {
   try {
     await Promise.all([
       captureLatestReplyFromTarget(TARGETS.chatgpt),
@@ -295,6 +293,57 @@ async function sendComposerToBoth() {
   } catch (error) {
     setStatus(`Send failed: ${getErrorMessage(error)}`);
   }
+}
+
+function parseComposerRoute(rawText) {
+  let remainingText = rawText.trimStart();
+  const targets = new Set();
+
+  while (true) {
+    const tagMatch = remainingText.match(/^@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/i);
+
+    if (!tagMatch) {
+      break;
+    }
+
+    const target = getTargetFromComposerTag(tagMatch[0]);
+
+    if (!target) {
+      break;
+    }
+
+    if (target === "both") {
+      targets.add(TARGETS.gemini);
+      targets.add(TARGETS.chatgpt);
+    } else {
+      targets.add(target);
+    }
+
+    remainingText = remainingText.slice(tagMatch[0].length).trimStart();
+  }
+
+  return {
+    text: targets.size > 0 ? remainingText.trim() : rawText.trim(),
+    targets: targets.size > 0 ? Array.from(targets) : [TARGETS.gemini, TARGETS.chatgpt]
+  };
+}
+
+function getTargetFromComposerTag(tag) {
+  const normalized = tag.toLowerCase().replace(/[,:;.!?]+$/g, "");
+
+  if (["@gemini", "@gem"].includes(normalized)) {
+    return TARGETS.gemini;
+  }
+
+  if (["@lobo", "@chatgpt", "@gpt"].includes(normalized)) {
+    return TARGETS.chatgpt;
+  }
+
+  if (["@both", "@council", "@all"].includes(normalized)) {
+    return "both";
+  }
+
+  return null;
 }
 
 async function sendToTarget(target) {
@@ -989,12 +1038,62 @@ async function sendMessageWithFallback(tabId, message) {
   }
 }
 
-function insertPromptInTab(tabId, text, options) {
-  return sendMessageWithFallback(tabId, {
-    type: "INSERT_TEXT",
-    text,
-    showAlerts: options?.showAlerts !== false,
-    submit: options?.submit === true
+async function insertPromptInTab(tabId, text, options) {
+  const wakeResponse = await wakeTabForInjection(tabId);
+
+  try {
+    let response = await sendMessageWithFallback(tabId, {
+      type: "INSERT_TEXT",
+      text,
+      showAlerts: options?.showAlerts !== false,
+      submit: options?.submit === true
+    });
+
+    if (response?.ok) {
+      return response;
+    }
+
+    await delay(250);
+    return sendMessageWithFallback(tabId, {
+      type: "INSERT_TEXT",
+      text,
+      showAlerts: options?.showAlerts !== false,
+      submit: options?.submit === true
+    });
+  } finally {
+    if (wakeResponse?.previousTabId && wakeResponse.previousTabId !== tabId) {
+      await restoreTabAfterInjection(wakeResponse.previousTabId);
+    }
+  }
+}
+
+async function wakeTabForInjection(tabId) {
+  const response = await chrome.runtime.sendMessage({
+    type: "WAKE_TAB_FOR_INJECTION",
+    tabId
+  });
+
+  if (response?.ok === false) {
+    console.warn(`[CouncilBridge][WAKE_TAB_FAILED] tabId=${tabId} error=${response.error || "Unknown error"}`);
+  }
+
+  return response;
+}
+
+async function restoreTabAfterInjection(tabId) {
+  const response = await chrome.runtime.sendMessage({
+    type: "RESTORE_TAB_AFTER_INJECTION",
+    tabId
+  });
+
+  if (response?.ok === false) {
+    console.warn(`[CouncilBridge][RESTORE_TAB_FAILED] tabId=${tabId} error=${response.error || "Unknown error"}`);
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
   });
 }
 

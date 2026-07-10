@@ -235,7 +235,6 @@
 
       .send-row {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 8px;
       }
     </style>
@@ -269,9 +268,7 @@
       <section class="composer" aria-label="Composer">
         <textarea id="composerText" placeholder="Write as Christopher..."></textarea>
         <div class="send-row">
-          <button id="sendComposerToGemini" type="button">Send to Gemini</button>
-          <button id="sendComposerToBoth" type="button">Insert for both</button>
-          <button id="sendComposerToChatGPT" type="button">Send to ChatGPT</button>
+          <button id="sendComposer" class="primary" type="button">Send</button>
         </div>
       </section>
     </main>

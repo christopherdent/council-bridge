@@ -33,7 +33,7 @@ Completed ChatGPT and Gemini replies are also added automatically after their vi
 
 Use Pause capture if an unrelated tab or conversation should not be collected while you inspect it.
 
-Typed messages in the side panel use Send to Gemini, Send to ChatGPT, or Insert for both. Council Bridge sends every transcript turn that target has not seen since it was last advised.
+Typed messages in the side panel use one Send button. By default, Council Bridge sends to both agents. Add a leading `@gemini`, `@gem`, `@lobo`, `@chatgpt`, or `@gpt` tag to route only to that agent. Use `@both`, `@all`, or `@council` to explicitly route to both. Council Bridge strips recognized leading routing tags before storing and sending the message, and sends every transcript turn that target has not seen since it was last advised.
 
 The Gemini-to-ChatGPT wrapped prompt uses this format:
 

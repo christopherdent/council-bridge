@@ -44,6 +44,24 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "WAKE_TAB_FOR_INJECTION") {
+    wakeTabForInjection(message.tabId)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Unknown error" });
+      });
+    return true;
+  }
+
+  if (message?.type === "RESTORE_TAB_AFTER_INJECTION") {
+    restoreTabAfterInjection(message.tabId)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Unknown error" });
+      });
+    return true;
+  }
+
   if (message?.type !== "AI_REPLY_READY") {
     return;
   }
@@ -57,6 +75,74 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return true;
 });
+
+async function wakeTabForInjection(tabId) {
+  if (!Number.isInteger(tabId)) {
+    return { ok: false, error: "Missing tabId" };
+  }
+
+  const targetTab = await chrome.tabs.get(tabId);
+
+  if (targetTab.active) {
+    return { ok: true, activated: false };
+  }
+
+  const [previousActiveTab] = await chrome.tabs.query({
+    active: true,
+    windowId: targetTab.windowId
+  });
+
+  await chrome.tabs.update(tabId, { active: true });
+  await waitForTabReady(tabId);
+  console.info(`[CouncilBridge][TAB_WOKEN_FOR_INJECTION] tabId=${tabId} previousTabId=${previousActiveTab?.id || ""}`);
+
+  return {
+    ok: true,
+    activated: true,
+    previousTabId: previousActiveTab?.id
+  };
+}
+
+async function restoreTabAfterInjection(tabId) {
+  if (!Number.isInteger(tabId)) {
+    return { ok: false, error: "Missing tabId" };
+  }
+
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    await chrome.tabs.update(tabId, { active: true });
+    console.info(`[CouncilBridge][TAB_RESTORED_AFTER_INJECTION] tabId=${tabId}`);
+    return { ok: true, windowId: tab.windowId };
+  } catch (error) {
+    return { ok: false, error: error?.message || "Unknown error" };
+  }
+}
+
+async function waitForTabReady(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+
+  if (tab.status === "complete") {
+    return;
+  }
+
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(done, 10000);
+
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        done();
+      }
+    }
+
+    function done() {
+      clearTimeout(timeoutId);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
 
 async function appendAutomaticReply(message, sender) {
   const text = normalizeReplyText(message.text || "");
