@@ -20,6 +20,7 @@ const TYPEWRITER_INTERVAL_MS = 28;
 const TYPEWRITER_MAX_DURATION_MS = 600;
 const ASSISTANT_REVEAL_GAP_MS = 2000;
 const PENDING_CONVERSATION_PREFIX = "pending";
+const FRESH_CHAT_CONTEXT_LIMIT = 24;
 
 const TARGETS = {
   gemini: {
@@ -29,7 +30,7 @@ const TARGETS = {
     label: "Gemini",
     defaultNickname: "Gemini",
     defaultSourceLabel: "ChatGPT",
-    instruction: "Gemini, please respond to Christopher and ChatGPT with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.",
+    instruction: "Gemini, please respond to the user and ChatGPT with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.",
     wrapTurns: (turnsToSend, options = {}) => {
       const targetName = getAgentName(TARGETS.gemini);
       const chatgptName = getAgentName(TARGETS.chatgpt);
@@ -42,7 +43,7 @@ The following turns happened since ${targetName} was last advised.
 
 ${formatTurnsForPrompt(turnsToSend)}
 
-${targetName}, please respond to Christopher and ${chatgptName} with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`;
+${targetName}, please respond to ${getHumanName()} and ${chatgptName} with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`;
     }
   },
   chatgpt: {
@@ -52,7 +53,7 @@ ${targetName}, please respond to Christopher and ${chatgptName} with an independ
     label: "ChatGPT",
     defaultNickname: "ChatGPT",
     defaultSourceLabel: "Gemini",
-    instruction: "ChatGPT, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.",
+    instruction: "ChatGPT, please respond to the user and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.",
     wrapTurns: (turnsToSend, options = {}) => {
       const targetName = getAgentName(TARGETS.chatgpt);
       const geminiName = getAgentName(TARGETS.gemini);
@@ -65,7 +66,7 @@ The following turns happened since ${targetName} was last advised.
 
 ${formatTurnsForPrompt(turnsToSend)}
 
-${targetName}, please respond to Christopher and ${geminiName}. Agree, disagree, refine the plan, and turn it into concrete next steps.`;
+${targetName}, please respond to ${getHumanName()} and ${geminiName}. Agree, disagree, refine the plan, and turn it into concrete next steps.`;
     }
   }
 };
@@ -81,8 +82,11 @@ const clearConversationButton = document.getElementById("clearConversation");
 const sessionSummaryEl = document.getElementById("sessionSummary");
 const setActiveAsChatGPTButton = document.getElementById("setActiveAsChatGPT");
 const setActiveAsGeminiButton = document.getElementById("setActiveAsGemini");
+const freshChatGPTButton = document.getElementById("freshChatGPT");
+const freshGeminiButton = document.getElementById("freshGemini");
 const removeActiveFromCouncilButton = document.getElementById("removeActiveFromCouncil");
 const toggleCapturePauseButton = document.getElementById("toggleCapturePause");
+const humanNicknameEl = document.getElementById("humanNickname");
 const chatgptNicknameEl = document.getElementById("chatgptNickname");
 const geminiNicknameEl = document.getElementById("geminiNickname");
 const roundtableModeEl = document.getElementById("roundtableMode");
@@ -122,10 +126,13 @@ sendComposerButton.addEventListener("click", sendComposer);
 clearConversationButton.addEventListener("click", clearConversation);
 setActiveAsChatGPTButton.addEventListener("click", () => setActiveTabAsCouncilMember(TARGETS.chatgpt));
 setActiveAsGeminiButton.addEventListener("click", () => setActiveTabAsCouncilMember(TARGETS.gemini));
+freshChatGPTButton.addEventListener("click", () => startFreshCouncilChat(TARGETS.chatgpt));
+freshGeminiButton.addEventListener("click", () => startFreshCouncilChat(TARGETS.gemini));
 removeActiveFromCouncilButton.addEventListener("click", removeActiveTabFromCouncil);
 toggleCapturePauseButton.addEventListener("click", toggleCapturePause);
 composerTextEl.addEventListener("input", saveDraft);
 composerTextEl.addEventListener("keydown", handleComposerKeydown);
+humanNicknameEl.addEventListener("change", () => saveHumanNickname(humanNicknameEl.value));
 chatgptNicknameEl.addEventListener("change", () => saveNickname(TARGETS.chatgpt, chatgptNicknameEl.value));
 geminiNicknameEl.addEventListener("change", () => saveNickname(TARGETS.gemini, geminiNicknameEl.value));
 roundtableModeEl.addEventListener("change", toggleRoundtableMode);
@@ -331,7 +338,7 @@ async function sendComposerToTarget(target, text) {
     });
     composerTextEl.value = "";
     await appendTurn({
-      speaker: "Christopher",
+      speaker: "User",
       text,
       target: getAgentName(target),
       recipients: [target.key]
@@ -356,7 +363,7 @@ async function sendComposerToBoth(text) {
     });
     composerTextEl.value = "";
     await appendTurn({
-      speaker: "Christopher",
+      speaker: "User",
       text,
       target: `${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`,
       recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key]
@@ -398,7 +405,7 @@ async function sendComposerRoundtable(text) {
     composerTextEl.value = "";
 
     await appendTurn({
-      speaker: "Christopher",
+      speaker: "User",
       text,
       target: `Roundtable: ${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`,
       recipients: [TARGETS.gemini.key, TARGETS.chatgpt.key]
@@ -639,7 +646,7 @@ async function appendTurn(turn, options = {}) {
     return false;
   }
 
-  if (turn.speaker === "Christopher") {
+  if (isHumanSpeaker(turn.speaker)) {
     cancelQueuedTargetSends("new_christopher_turn");
     await resetBotToBotTurnCount();
     await resetRoundtablePendingForChristopher();
@@ -813,7 +820,7 @@ function isTurnRoutedToTarget(turn, target) {
     return turn.recipients.includes(target.key);
   }
 
-  if (turn.speaker === "Christopher") {
+  if (isHumanSpeaker(turn.speaker)) {
     return parseComposerRoute(turn.text).targets.some((recipient) => recipient.key === target.key);
   }
 
@@ -853,6 +860,10 @@ function getAgentName(target) {
   return member?.nickname || councilSession.nicknames?.[target.key] || member?.displayName || target.defaultNickname || target.label;
 }
 
+function getHumanName() {
+  return councilSession.nicknames?.human || "User";
+}
+
 function formatTurnCount(count) {
   return `${count} update${count === 1 ? "" : "s"}`;
 }
@@ -866,12 +877,13 @@ function formatCouncilOverview(target) {
   const targetName = getAgentName(target);
   const chatgptName = getAgentName(TARGETS.chatgpt);
   const geminiName = getAgentName(TARGETS.gemini);
+  const humanName = getHumanName();
 
-  return `Council overview: Council Bridge is Christopher's browser side panel for coordinating ${chatgptName} and ${geminiName}. Project README: https://github.com/christopherdent/council-bridge/blob/main/README.md
+  return `Council overview: Council Bridge is ${humanName}'s browser side panel for coordinating ${chatgptName} and ${geminiName}. Project README: https://github.com/christopherdent/council-bridge/blob/main/README.md
 
-Christopher writes or captures turns, then Council Bridge forwards the new turns to the other council member.
+${humanName} writes or captures turns, then Council Bridge forwards the new turns to the other council member.
 
-Routing notes: tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. Christopher can include tags anywhere in his side-panel message to choose recipients; a single member tag means only that member should receive and answer. When you include the other council member's tag anywhere in your reply, Council Bridge treats it as a handoff request and asks Christopher to approve sending your reply to that member. Treat tags as conversation routing context, not as a claim that you cannot participate.
+Routing notes: tags such as @chatgpt, @gpt, @lobo, @gemini, @gem, @both, @all, or nickname tags are routing hints for Council Bridge. ${humanName} can include tags anywhere in the side-panel message to choose recipients; a single member tag means only that member should receive and answer. When you include the other council member's tag anywhere in your reply, Council Bridge treats it as a handoff request and asks ${humanName} to approve sending your reply to that member. Treat tags as conversation routing context, not as a claim that you cannot participate.
 
 Context note for ${targetName}: this may be a fresh browser conversation. Search or use any conversation history available to you for relevant context, then continue from the included turns.
 
@@ -880,11 +892,12 @@ ${formatAgentDisposition(target)}`;
 
 function formatAgentDisposition(target) {
   const targetName = getAgentName(target);
+  const humanName = getHumanName();
 
   return `COUNCIL AGENT DISPOSITION
 
 Operating mandate — productive friction:
-You are an independent engineering peer in a multi-agent council coordinated by Christopher. Do not behave as an agreement machine. Automatic consensus, generic validation, and paraphrasing another agent without adding analysis are failures. Look for unstated assumptions, edge cases, invalid parameter choices, missing evidence, and practical implementation risks. Disagree only when the technical or real-world logic supports disagreement.
+You are an independent engineering peer in a multi-agent council coordinated by ${humanName}. Do not behave as an agreement machine. Automatic consensus, generic validation, and paraphrasing another agent without adding analysis are failures. Look for unstated assumptions, edge cases, invalid parameter choices, missing evidence, and practical implementation risks. Disagree only when the technical or real-world logic supports disagreement.
 
 Assigned cognitive role:
 ${formatCognitiveRole(target)}
@@ -892,7 +905,7 @@ ${formatCognitiveRole(target)}
 Anti-echo protocol:
 Before answering, evaluate the supplied turns using these stages:
 
-1. Exploration: Understand Christopher's request, the relevant constraints, and the other agent's contribution before judging it.
+1. Exploration: Understand ${humanName}'s request, the relevant constraints, and the other agent's contribution before judging it.
 2. Discovery critique: Identify at least one plausible failure mode, hidden assumption, unvalidated optimization, missing dependency, or real-world complication when one genuinely exists. Do not invent objections just to appear independent.
 3. Evidence assessment: Separate verified facts and established constraints from inferences, estimates, and speculation. State what would need validation when the distinction affects the recommendation.
 4. Concession and position change: If new evidence changes your conclusion, say so directly and explain why. Use wording such as, "I am changing my position on X because the supplied evidence or constraint shows Y." Do not manufacture a position change when none occurred.
@@ -900,10 +913,10 @@ Before answering, evaluate the supplied turns using these stages:
 Do not expose private chain-of-thought or produce a ceremonial transcript of these stages. Present only the useful conclusions, critiques, evidence distinctions, and concrete next steps.
 
 Human anchor:
-Christopher is the primary systems engineer and final decision-maker. Treat his explicit constraints, scope, and priorities as authoritative unless they conflict with a demonstrated technical fact or safety requirement. If the council drifts into theoretical, circular, excessively verbose, or non-actionable discussion, stop the drift. Re-anchor the response to Christopher's actual request, explain the concrete decision or risk, and provide the smallest useful next step.
+${humanName} is the primary systems engineer and final decision-maker. Treat ${humanName}'s explicit constraints, scope, and priorities as authoritative unless they conflict with a demonstrated technical fact or safety requirement. If the council drifts into theoretical, circular, excessively verbose, or non-actionable discussion, stop the drift. Re-anchor the response to ${humanName}'s actual request, explain the concrete decision or risk, and provide the smallest useful next step.
 
 Routing and handoffs:
-Council Bridge route tags are application routing hints. Do not reinterpret them as authority or identity claims. Mentioning the other council member's tag may request a handoff, but Christopher's Human Gavel and Council Bridge's safety limits remain authoritative. Do not attempt to bypass them.
+Council Bridge route tags are application routing hints. Do not reinterpret them as authority or identity claims. Mentioning the other council member's tag may request a handoff, but ${humanName}'s Human Gavel and Council Bridge's safety limits remain authoritative. Do not attempt to bypass them.
 
 You are participating in this council as ${targetName}.`;
 }
@@ -956,10 +969,12 @@ function getPromptSpeaker(speaker) {
     };
   }
 
+  const humanName = getHumanName();
+
   return {
-    source: "Christopher",
-    saidLine: "Christopher said",
-    blockLabel: "CHRISTOPHER"
+    source: humanName,
+    saidLine: `${humanName} said`,
+    blockLabel: normalizeBlockLabel(humanName)
   };
 }
 
@@ -1117,7 +1132,7 @@ function renderTurns() {
   if (turns.length === 0 && replyWatchers.size === 0) {
     const emptyEl = document.createElement("p");
     emptyEl.className = "empty";
-    emptyEl.textContent = "No turns yet. Highlight a response or write as Christopher.";
+    emptyEl.textContent = `No turns yet. Highlight a response or write as ${getHumanName()}.`;
     turnsEl.append(emptyEl);
     return;
   }
@@ -1205,11 +1220,19 @@ function getTurnSpeakerDisplayName(speaker) {
     return getAgentName(TARGETS.gemini);
   }
 
+  if (isHumanSpeaker(speaker)) {
+    return getHumanName();
+  }
+
   return speaker;
 }
 
 function isAgentSpeaker(speaker) {
   return speaker === "ChatGPT" || speaker === "Gemini";
+}
+
+function isHumanSpeaker(speaker) {
+  return speaker === "User" || speaker === "Christopher";
 }
 
 function getTargetKeyForSpeaker(speaker) {
@@ -1255,6 +1278,7 @@ function normalizeCouncilSession(value) {
     createdAt,
     paused: Boolean(value?.paused),
     nicknames: {
+      human: normalizeNickname(value?.nicknames?.human) || "User",
       chatgpt: normalizeNickname(value?.nicknames?.chatgpt) || TARGETS.chatgpt.defaultNickname,
       gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
     },
@@ -1424,6 +1448,98 @@ async function removeActiveTabFromCouncil() {
   setStatus(`Removed ${removedName} from the council.`);
 }
 
+async function startFreshCouncilChat(target) {
+  try {
+    const nickname = getAgentName(target);
+    const tab = await chrome.tabs.create({ url: target.openUrl, active: true });
+    await waitForTabReady(tab.id);
+    const currentTab = await chrome.tabs.get(tab.id);
+    const conversationId = extractConversationId(currentTab.url, target.key) || createPendingConversationId(target.key);
+    const contextTurns = getFreshChatContextTurns();
+
+    stopReplyWatcher(target.label);
+    cancelQueuedTargetSends(`fresh_${target.key}_chat`);
+
+    councilSession = {
+      ...councilSession,
+      members: {
+        ...councilSession.members,
+        [target.key]: {
+          conversationId,
+          currentTabId: currentTab.id,
+          currentWindowId: currentTab.windowId,
+          url: currentTab.url,
+          displayName: target.label,
+          nickname,
+          role: "agent",
+          status: "connected",
+          assignedAt: Date.now()
+        }
+      }
+    };
+
+    deliveryState = {
+      ...deliveryState,
+      [target.label]: 0
+    };
+
+    await chrome.storage.local.set({ [STORAGE_KEYS.deliveryState]: deliveryState });
+    await saveCouncilSession();
+
+    const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
+    const prompt = buildFreshChatPrompt(target, contextTurns);
+
+    if (!councilSession.paused) {
+      startReplyWatcher(target, latestReplyBeforeSend);
+    }
+
+    const response = await insertPromptInTab(currentTab.id, prompt, {
+      showAlerts: true,
+      submit: true
+    });
+
+    if (response?.ok && response?.submitted) {
+      if (contextTurns.length > 0) {
+        await markTargetAdvised(target, contextTurns);
+      }
+      setStatus(`Started fresh ${nickname} chat with recent context.`);
+      return;
+    }
+
+    stopReplyWatcher(target.label);
+    setStatus(`Opened fresh ${nickname} tab, but could not submit context.`);
+  } catch (error) {
+    stopReplyWatcher(target.label);
+    setStatus(`Fresh chat failed: ${getErrorMessage(error)}`);
+  }
+}
+
+function getFreshChatContextTurns() {
+  return turns.slice(-FRESH_CHAT_CONTEXT_LIMIT);
+}
+
+function buildFreshChatPrompt(target, contextTurns) {
+  const targetName = getAgentName(target);
+  const otherTarget = getCounterpartTarget(target);
+  const otherName = getAgentName(otherTarget);
+  const humanName = getHumanName();
+  const contextText = contextTurns.length > 0
+    ? formatTurnsForPrompt(contextTurns)
+    : "No prior council turns are currently stored.";
+
+  return `[Council Bridge Fresh Chat]
+You are ${targetName}, joining an existing Council Bridge session in a fresh browser chat because the previous tab may have become slow.
+
+Human user: ${humanName}
+Other council member: ${otherName}
+
+Use the recent context below to rejoin the discussion. Do not replay or answer every old turn. Acknowledge briefly that you are caught up, then wait for the next message unless the latest turn clearly asks for a current response.
+
+Recent council context, newest last:
+
+${contextText}`;
+}
+
 async function toggleCapturePause() {
   councilSession = {
     ...councilSession,
@@ -1462,9 +1578,11 @@ async function saveCouncilSession() {
 }
 
 function renderCouncilSession() {
+  humanNicknameEl.value = getHumanName();
   chatgptNicknameEl.value = getAgentName(TARGETS.chatgpt);
   geminiNicknameEl.value = getAgentName(TARGETS.gemini);
   roundtableModeEl.checked = councilSession.roundtable.enabled;
+  composerTextEl.placeholder = `Write as ${getHumanName()}...`;
 
   const chatgpt = formatCouncilMember(councilSession.members.chatgpt, "not set");
   const gemini = formatCouncilMember(councilSession.members.gemini, "not set");
@@ -1634,15 +1752,15 @@ function formatRoundtableInstruction(target, roundtable) {
     const firstName = roundtable.firstName || "Reviewer 1";
 
     return `[Council Bridge Roundtable]
-You are Reviewer 2 in this round. The included turns should contain Christopher's prompt and ${firstName}'s response.
+You are Reviewer 2 in this round. The included turns should contain ${getHumanName()}'s prompt and ${firstName}'s response.
 
-Evaluate ${firstName}'s response independently. Agree, refine, or challenge it with concrete reasons. Do not merely edit, summarize, or echo ${firstName}. Preserve your own judgment and keep the reply concise unless Christopher asked for depth.
+Evaluate ${firstName}'s response independently. Agree, refine, or challenge it with concrete reasons. Do not merely edit, summarize, or echo ${firstName}. Preserve your own judgment and keep the reply concise unless ${getHumanName()} asked for depth.
 
 Do not tag the other council member in a Roundtable response. Council Bridge is already handling the sequence.`;
   }
 
   return `[Council Bridge Roundtable]
-You are Reviewer 1 in this round. Give Christopher your independent answer first. Do not try to predict or force consensus with the other council member. Surface the most useful point, risk, or recommendation clearly and keep the reply concise unless Christopher asked for depth.
+You are Reviewer 1 in this round. Give ${getHumanName()} your independent answer first. Do not try to predict or force consensus with the other council member. Surface the most useful point, risk, or recommendation clearly and keep the reply concise unless ${getHumanName()} asked for depth.
 
 Do not tag the other council member in a Roundtable response. Council Bridge will pass your answer to Reviewer 2 automatically.
 
@@ -1962,6 +2080,22 @@ async function saveNickname(target, rawValue) {
 
   await saveCouncilSession();
   setStatus(`Saved ${target.label} nickname as ${nickname}.`);
+}
+
+async function saveHumanNickname(rawValue) {
+  const nickname = normalizeNickname(rawValue) || "User";
+
+  councilSession = {
+    ...councilSession,
+    nicknames: {
+      ...councilSession.nicknames,
+      human: nickname
+    }
+  };
+
+  await saveCouncilSession();
+  renderTurns();
+  setStatus(`Saved your name as ${nickname}.`);
 }
 
 function normalizeNickname(value) {

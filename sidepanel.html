@@ -165,13 +165,17 @@
 
       .session-actions {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 6px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 5px;
       }
 
       .session-actions button {
-        padding: 7px 8px;
-        font-size: 12px;
+        min-width: 0;
+        padding: 6px 5px;
+        overflow: hidden;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
 
       .nickname-row {
@@ -348,7 +352,8 @@
         background: var(--gemini-bg);
       }
 
-      .turn.christopher {
+      .turn.christopher,
+      .turn.user {
         border-color: var(--christopher-border);
         border-left-color: var(--christopher);
         background: var(--christopher-bg);
@@ -483,6 +488,10 @@
           <div class="session-panel-body">
             <p id="sessionSummary" class="session-summary"></p>
             <label class="nickname-row">
+              <span>Your name</span>
+              <input id="humanNickname" type="text" placeholder="User">
+            </label>
+            <label class="nickname-row">
               <span>ChatGPT name</span>
               <input id="chatgptNickname" type="text" placeholder="ChatGPT">
             </label>
@@ -495,10 +504,12 @@
               <span>Roundtable mode</span>
             </label>
             <div class="session-actions">
-              <button id="setActiveAsChatGPT" type="button" title="Assign the active tab as ChatGPT">Set ChatGPT</button>
-              <button id="setActiveAsGemini" type="button" title="Assign the active tab as Gemini">Set Gemini</button>
-              <button id="removeActiveFromCouncil" type="button" title="Remove the active tab from this council">Remove tab</button>
-              <button id="toggleCapturePause" type="button" title="Pause or resume automatic reply capture">Pause capture</button>
+              <button id="setActiveAsChatGPT" type="button" title="Assign the active tab as ChatGPT">Set GPT</button>
+              <button id="setActiveAsGemini" type="button" title="Assign the active tab as Gemini">Set Gem</button>
+              <button id="removeActiveFromCouncil" type="button" title="Remove the active tab from this council">Remove</button>
+              <button id="freshChatGPT" type="button" title="Open a fresh ChatGPT council tab and seed it with recent context">New GPT</button>
+              <button id="freshGemini" type="button" title="Open a fresh Gemini council tab and seed it with recent context">New Gem</button>
+              <button id="toggleCapturePause" type="button" title="Pause or resume automatic reply capture">Pause</button>
             </div>
           </div>
         </details>
@@ -518,7 +529,7 @@
       <section id="turns" class="turns" aria-label="Conversation"></section>
 
       <section class="composer" aria-label="Composer">
-        <textarea id="composerText" placeholder="Write as Christopher..."></textarea>
+        <textarea id="composerText" placeholder="Write as User..."></textarea>
         <div class="send-row">
           <button id="sendComposer" class="primary" type="button">Send</button>
         </div>

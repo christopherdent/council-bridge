@@ -395,6 +395,7 @@ function normalizeCouncilSession(value) {
     createdAt,
     paused: Boolean(value?.paused),
     nicknames: {
+      human: normalizeNickname(value?.nicknames?.human) || "User",
       chatgpt: normalizeNickname(value?.nicknames?.chatgpt) || TARGETS.chatgpt.defaultNickname,
       gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
     },

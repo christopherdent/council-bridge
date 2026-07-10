@@ -2,7 +2,7 @@
 
 Council Bridge is a tiny Chrome and Edge extension for manually moving highlighted text between ChatGPT and Gemini browser tabs. It captures selected text, tracks the snippets you explicitly add, wraps unseen turns in a direction-specific prompt, inserts them into the target service, and clicks send from the side panel.
 
-The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows snippets you explicitly pass, selected replies you add, latest replies you refresh, automatically captured completed AI replies, and text you write as Christopher. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
+The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts in the background when possible, so you can keep working in the current tab instead of switching back and forth. The side panel shows snippets you explicitly pass, selected replies you add, latest replies you refresh, automatically captured completed AI replies, and text you write as yourself. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
 
 It does not use OpenAI or Gemini APIs and does not scrape full conversations.
 
@@ -63,7 +63,7 @@ Routing tags can appear anywhere in the message and are case-insensitive. A sing
 
 ### Nicknames
 
-ChatGPT and Gemini are the default names. Use the nickname fields in the side panel to rename either council member for transcript display and prompt wording.
+`User`, `ChatGPT`, and `Gemini` are the default names. Use the nickname fields in the side panel to rename yourself or either council member for transcript display and prompt wording.
 
 Nicknames can also be used as route tags. For example, if ChatGPT is nicknamed `Lobo`, then `@lobo` routes only to ChatGPT. Built-in aliases still work:
 
@@ -75,19 +75,19 @@ When Council Bridge sends to an agent, it includes every transcript turn that ag
 
 If an agent is still responding, Council Bridge queues that agent's next send for up to five minutes. It waits in the side panel without holding the browser on the target tab, then batches all still-unseen turns and submits them when the composer becomes available. Sends to the same agent run one at a time so rapid messages cannot race in the target composer.
 
-The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that Christopher is coordinating ChatGPT and Gemini through the side panel. The first send bundles three things:
+The first send to an agent also includes a short Council Bridge overview and a link to this README, so a fresh conversation knows that the configured human user is coordinating ChatGPT and Gemini through the side panel. The first send bundles three things:
 
 - the Council Bridge overview,
 - routing and handoff context (`@chatgpt`, `@gemini`, `@both`, and nickname tags are Council Bridge routing hints, and how bot-to-bot handoffs are gated by the Human Gavel),
 - a target-specific Council Agent Disposition.
 
-The disposition sets each agent up as an independent engineering peer rather than an agreement machine: it asks for productive friction, an anti-echo protocol (explore, critique, separate evidence from speculation, and openly concede when new evidence changes a conclusion), and keeps Christopher as the primary systems engineer and final decision-maker. The cognitive role differs by agent — Gemini is pointed at macro-scale architecture, cross-disciplinary synthesis, and scaling; ChatGPT is pointed at rigorous decomposition, deterministic validation, hidden assumptions, and edge cases. Role selection is keyed to the actual target (ChatGPT vs. Gemini), not its nickname. The disposition ships only with the first-send overview; later incremental sends do not repeat it.
+The disposition sets each agent up as an independent engineering peer rather than an agreement machine: it asks for productive friction, an anti-echo protocol (explore, critique, separate evidence from speculation, and openly concede when new evidence changes a conclusion), and keeps the configured human user as the primary systems engineer and final decision-maker. The cognitive role differs by agent — Gemini is pointed at macro-scale architecture, cross-disciplinary synthesis, and scaling; ChatGPT is pointed at rigorous decomposition, deterministic validation, hidden assumptions, and edge cases. Role selection is keyed to the actual target (ChatGPT vs. Gemini), not its nickname. The disposition ships only with the first-send overview; later incremental sends do not repeat it.
 
 ### Roundtable Mode
 
 Enable `Roundtable mode` in Council setup when you want a group message to run sequentially instead of in parallel.
 
-In Roundtable mode, a group send goes to one council member first. When that reply is captured, Council Bridge sends the still-unseen context to the other member, so the second response includes Christopher's message plus the first agent's answer. The starting member alternates each round.
+In Roundtable mode, a group send goes to one council member first. When that reply is captured, Council Bridge sends the still-unseen context to the other member, so the second response includes the human user's message plus the first agent's answer. The starting member alternates each round.
 
 Single-member route tags still send directly to that member. Bot-to-bot Human Gavel handoffs still work for normal assistant replies outside the active Roundtable pass.
 
@@ -124,7 +124,7 @@ The first valid tag for the other council member creates a pending handoff. `@bo
 
 The approval actions remain disabled while the destination agent is responding, disconnected, stale, already has a queued send, or has no new handoff context. The panel checks readiness continuously and enables and flashes the approval action only when the handoff can be sent. Reject remains available whenever a handoff is pending.
 
-The default bot-to-bot safety limit is 3 turns. When the limit is reached, Council Bridge stops routing and waits for the Human Gavel. Any new Christopher message resets the bot-to-bot turn count.
+The default bot-to-bot safety limit is 3 turns. When the limit is reached, Council Bridge stops routing and waits for the Human Gavel. Any new human message resets the bot-to-bot turn count.
 
 Handoffs are blocked if the target member is stale, disconnected, or not assigned to the current council session.
 
@@ -137,6 +137,8 @@ Use `Refresh replies` to manually pull the latest visible reply from both regist
 Use `Add selection` to add highlighted text from the active council tab to the side panel without sending it anywhere.
 
 Use `Pass selected reply to other AI` to capture highlighted text from the active council tab and send it to the other registered council agent.
+
+Use `New GPT` or `New Gem` in Council setup when a ChatGPT or Gemini tab gets slow. Council Bridge opens a fresh tab, assigns it as that council member, and seeds it with a bounded recent-context packet so it can rejoin the wider discussion. The seed prompt is intentionally compact; it asks the agent to acknowledge that it is caught up rather than replaying the whole transcript.
 
 ### Pause and Reset
 
@@ -165,7 +167,7 @@ Gemini said:
 Selected text
 --- END GEMINI MESSAGE ---
 
-ChatGPT, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.
+ChatGPT, please respond to the user and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.
 ```
 
 ## Known Limitations
