@@ -7,10 +7,12 @@ const MAX_TURNS = 80;
 const TARGETS = {
   chatgpt: {
     label: "ChatGPT",
+    defaultNickname: "ChatGPT",
     openUrl: "https://chatgpt.com/"
   },
   gemini: {
     label: "Gemini",
+    defaultNickname: "Gemini",
     openUrl: "https://gemini.google.com/"
   }
 };
@@ -305,8 +307,18 @@ function getCouncilMembership(rawSession, sender) {
 }
 
 function normalizeCouncilSession(value) {
+  const createdAt = normalizeTimestamp(value?.createdAt);
+
   return {
+    sessionId: value?.sessionId || `council_${createdAt}`,
+    title: value?.title || "Council Bridge",
+    createdAt,
     paused: Boolean(value?.paused),
+    nicknames: {
+      chatgpt: normalizeNickname(value?.nicknames?.chatgpt) || TARGETS.chatgpt.defaultNickname,
+      gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
+    },
+    botToBot: normalizeBotToBotState(value?.botToBot),
     members: {
       chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
       gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
@@ -326,7 +338,39 @@ function normalizeCouncilMember(member, key) {
     currentTabId: Number.isInteger(member.currentTabId) ? member.currentTabId : member.tabId,
     currentWindowId: Number.isInteger(member.currentWindowId) ? member.currentWindowId : member.windowId,
     url: member.url || "",
+    displayName: member.displayName || "",
+    nickname: normalizeNickname(member.nickname || ""),
+    role: member.role || "agent",
+    assignedAt: Number(member.assignedAt) || Date.now(),
     status: member.status || "connected"
+  };
+}
+
+function normalizeBotToBotState(value) {
+  return {
+    enabled: value?.enabled !== false,
+    mode: value?.mode || "manual_approval",
+    maxTurns: Number(value?.maxTurns) > 0 ? Number(value.maxTurns) : 3,
+    currentTurnCount: Math.max(0, Number(value?.currentTurnCount) || 0),
+    approvedTurnsRemaining: Math.max(0, Number(value?.approvedTurnsRemaining) || 0),
+    pendingHandoff: normalizePendingHandoff(value?.pendingHandoff)
+  };
+}
+
+function normalizePendingHandoff(value) {
+  if (!value?.id || value.status !== "pending") {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    fromAgent: value.fromAgent || "",
+    toAgent: value.toAgent || "",
+    sourceMessageId: value.sourceMessageId || "",
+    detectedTag: value.detectedTag || "",
+    body: value.body || "",
+    createdAt: Number(value.createdAt) || Date.now(),
+    status: "pending"
   };
 }
 
@@ -432,6 +476,10 @@ function normalizeReplyText(text) {
 
 function normalizeForDuplicate(text) {
   return text.replace(/\s+/g, " ").trim();
+}
+
+function normalizeNickname(value) {
+  return String(value || "").trim().slice(0, 40);
 }
 
 function normalizeTimestamp(value) {

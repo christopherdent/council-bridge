@@ -19,34 +19,46 @@ const TARGETS = {
     urlPattern: "https://gemini.google.com/*",
     openUrl: "https://gemini.google.com/",
     label: "Gemini",
-    defaultSourceLabel: "ChatGPT / Lobo",
-    instruction: "Gemini, please respond to Christopher and Lobo with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.",
-    wrapTurns: (turnsToSend) => `[Council Bridge]
-Sources: ${formatSourceList(turnsToSend)}
-Target: Gemini
+    defaultNickname: "Gemini",
+    defaultSourceLabel: "ChatGPT",
+    instruction: "Gemini, please respond to Christopher and ChatGPT with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.",
+    wrapTurns: (turnsToSend) => {
+      const targetName = getAgentName(TARGETS.gemini);
+      const chatgptName = getAgentName(TARGETS.chatgpt);
 
-The following turns happened since Gemini was last advised.
+      return `[Council Bridge]
+Sources: ${formatSourceList(turnsToSend)}
+Target: ${targetName}
+
+The following turns happened since ${targetName} was last advised.
 
 ${formatTurnsForPrompt(turnsToSend)}
 
-Gemini, please respond to Christopher and Lobo with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`
+${targetName}, please respond to Christopher and ${chatgptName} with an independent second opinion. Challenge assumptions, catch gaps, and suggest practical improvements.`;
+    }
   },
   chatgpt: {
     key: "chatgpt",
     urlPattern: "https://chatgpt.com/*",
     openUrl: "https://chatgpt.com/",
     label: "ChatGPT",
+    defaultNickname: "ChatGPT",
     defaultSourceLabel: "Gemini",
-    instruction: "Lobo, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.",
-    wrapTurns: (turnsToSend) => `[Council Bridge]
-Sources: ${formatSourceList(turnsToSend)}
-Target: ChatGPT / Lobo
+    instruction: "ChatGPT, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.",
+    wrapTurns: (turnsToSend) => {
+      const targetName = getAgentName(TARGETS.chatgpt);
+      const geminiName = getAgentName(TARGETS.gemini);
 
-The following turns happened since ChatGPT / Lobo was last advised.
+      return `[Council Bridge]
+Sources: ${formatSourceList(turnsToSend)}
+Target: ${targetName}
+
+The following turns happened since ${targetName} was last advised.
 
 ${formatTurnsForPrompt(turnsToSend)}
 
-Lobo, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.`
+${targetName}, please respond to Christopher and ${geminiName}. Agree, disagree, refine the plan, and turn it into concrete next steps.`;
+    }
   }
 };
 
@@ -63,6 +75,14 @@ const setActiveAsChatGPTButton = document.getElementById("setActiveAsChatGPT");
 const setActiveAsGeminiButton = document.getElementById("setActiveAsGemini");
 const removeActiveFromCouncilButton = document.getElementById("removeActiveFromCouncil");
 const toggleCapturePauseButton = document.getElementById("toggleCapturePause");
+const chatgptNicknameEl = document.getElementById("chatgptNickname");
+const geminiNicknameEl = document.getElementById("geminiNickname");
+const handoffPanelEl = document.getElementById("handoffPanel");
+const handoffNoticeEl = document.getElementById("handoffNotice");
+const approveHandoffButton = document.getElementById("approveHandoff");
+const rejectHandoffButton = document.getElementById("rejectHandoff");
+const approveOneHandoffButton = document.getElementById("approveOneHandoff");
+const approveThreeHandoffsButton = document.getElementById("approveThreeHandoffs");
 
 let turns = [];
 let deliveryState = {
@@ -86,6 +106,12 @@ setActiveAsGeminiButton.addEventListener("click", () => setActiveTabAsCouncilMem
 removeActiveFromCouncilButton.addEventListener("click", removeActiveTabFromCouncil);
 toggleCapturePauseButton.addEventListener("click", toggleCapturePause);
 composerTextEl.addEventListener("input", saveDraft);
+chatgptNicknameEl.addEventListener("change", () => saveNickname(TARGETS.chatgpt, chatgptNicknameEl.value));
+geminiNicknameEl.addEventListener("change", () => saveNickname(TARGETS.gemini, geminiNicknameEl.value));
+approveHandoffButton.addEventListener("click", () => approvePendingHandoff(0));
+rejectHandoffButton.addEventListener("click", rejectPendingHandoff);
+approveOneHandoffButton.addEventListener("click", () => approvePendingHandoff(1));
+approveThreeHandoffsButton.addEventListener("click", () => approvePendingHandoff(3));
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") {
@@ -96,8 +122,12 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     return;
   }
 
+  let addedTurns = [];
+
   if (changes[STORAGE_KEYS.turns]) {
+    const previousTurns = changes[STORAGE_KEYS.turns].oldValue || [];
     turns = changes[STORAGE_KEYS.turns].newValue || [];
+    addedTurns = getAddedTurns(previousTurns, turns);
   }
 
   if (changes[STORAGE_KEYS.deliveryState]) {
@@ -110,6 +140,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
   reconcileRenderedTurns();
   renderCouncilSession();
+  renderHandoffPanel();
+
+  for (const turn of addedTurns) {
+    detectBotHandoffForTurn(turn);
+  }
 });
 
 async function loadPanelState() {
@@ -126,6 +161,7 @@ async function loadPanelState() {
   composerTextEl.value = stored[STORAGE_KEYS.draft] || "";
   revealAllTurnsImmediately();
   renderCouncilSession();
+  renderHandoffPanel();
 }
 
 async function passSelectionToOtherAi() {
@@ -150,7 +186,7 @@ async function passSelectionToOtherAi() {
     await appendTurn({
       speaker: source.label,
       text: selectedText,
-      target: target.label
+      target: getAgentName(target)
     });
     await sendToTarget(target);
   } catch (error) {
@@ -251,7 +287,7 @@ async function sendComposerToTarget(target, text) {
     await appendTurn({
       speaker: "Christopher",
       text,
-      target: target.label
+      target: getAgentName(target)
     }, {
       allowDuplicate: true
     });
@@ -275,7 +311,7 @@ async function sendComposerToBoth(text) {
     await appendTurn({
       speaker: "Christopher",
       text,
-      target: "Gemini + ChatGPT"
+      target: `${getAgentName(TARGETS.gemini)} + ${getAgentName(TARGETS.chatgpt)}`
     }, {
       allowDuplicate: true
     });
@@ -335,21 +371,25 @@ function parseComposerRoute(rawText) {
 }
 
 function getTargetFromComposerTag(tag) {
-  const normalized = tag.toLowerCase().replace(/[,:;.!?]+$/g, "");
+  const normalized = normalizeTagAlias(tag);
 
-  if (["@gemini", "@gem"].includes(normalized)) {
+  if (["gemini", "gem", normalizeTagAlias(getAgentName(TARGETS.gemini))].includes(normalized)) {
     return TARGETS.gemini;
   }
 
-  if (["@lobo", "@chatgpt", "@gpt"].includes(normalized)) {
+  if (["lobo", "chatgpt", "gpt", normalizeTagAlias(getAgentName(TARGETS.chatgpt))].includes(normalized)) {
     return TARGETS.chatgpt;
   }
 
-  if (["@both", "@council", "@all"].includes(normalized)) {
+  if (["both", "council", "all"].includes(normalized)) {
     return "both";
   }
 
   return null;
+}
+
+function normalizeTagAlias(value) {
+  return String(value || "").toLowerCase().replace(/^@/, "").replace(/[,:;.!?]+$/g, "").replace(/[^a-z0-9_-]+/g, "");
 }
 
 async function sendToTarget(target) {
@@ -357,12 +397,12 @@ async function sendToTarget(target) {
   const tab = await getCouncilTabForTarget(target);
 
   if (!tab) {
-    setStatus(`Set a council tab for ${target.label} first.`);
+    setStatus(`Set a council tab for ${getAgentName(target)} first.`);
     return false;
   }
 
   if (turnsToSend.length === 0) {
-    setStatus(`${target.label} is already caught up.`);
+    setStatus(`${getAgentName(target)} is already caught up.`);
     return true;
   }
 
@@ -380,7 +420,7 @@ async function sendToTarget(target) {
     if (!councilSession.paused) {
       startReplyWatcher(target, latestReplyBeforeSend);
     }
-    setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${target.label}.`);
+    setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${getAgentName(target)}.`);
     return true;
   }
 
@@ -395,22 +435,26 @@ async function sendToTarget(target) {
     if (!councilSession.paused) {
       startReplyWatcher(target, latestReplyBeforeSend);
     }
-    setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${target.label}.`);
+    setStatus(`Sent ${formatTurnCount(turnsToSend.length)} to ${getAgentName(target)}.`);
     return true;
   }
 
   if (response?.ok) {
-    setStatus(`Inserted into ${target.label}, but could not click send.`);
+    setStatus(`Inserted into ${getAgentName(target)}, but could not click send.`);
     return false;
   }
 
-  setStatus(`Could not find ${target.label}'s prompt box.`);
+  setStatus(`Could not find ${getAgentName(target)}'s prompt box.`);
   return false;
 }
 
 async function appendTurn(turn, options = {}) {
   if (!options.allowDuplicate && isDuplicateTurn(turn)) {
     return false;
+  }
+
+  if (turn.speaker === "Christopher") {
+    await resetBotToBotTurnCount();
   }
 
   const createdAt = Date.now();
@@ -572,6 +616,11 @@ function getCounterpartTarget(target) {
   return target.label === "Gemini" ? TARGETS.chatgpt : TARGETS.gemini;
 }
 
+function getAgentName(target) {
+  const member = councilSession.members[target.key];
+  return member?.nickname || councilSession.nicknames?.[target.key] || member?.displayName || target.defaultNickname || target.label;
+}
+
 function formatTurnCount(count) {
   return `${count} update${count === 1 ? "" : "s"}`;
 }
@@ -602,18 +651,22 @@ function formatTimestampForPrompt(value) {
 
 function getPromptSpeaker(speaker) {
   if (speaker === "ChatGPT") {
+    const name = getAgentName(TARGETS.chatgpt);
+
     return {
-      source: "ChatGPT / Lobo",
-      saidLine: "Lobo said",
-      blockLabel: "LOBO"
+      source: name,
+      saidLine: `${name} said`,
+      blockLabel: normalizeBlockLabel(name)
     };
   }
 
   if (speaker === "Gemini") {
+    const name = getAgentName(TARGETS.gemini);
+
     return {
-      source: "Gemini",
-      saidLine: "Gemini said",
-      blockLabel: "GEMINI"
+      source: name,
+      saidLine: `${name} said`,
+      blockLabel: normalizeBlockLabel(name)
     };
   }
 
@@ -622,6 +675,11 @@ function getPromptSpeaker(speaker) {
     saidLine: "Christopher said",
     blockLabel: "CHRISTOPHER"
   };
+}
+
+function normalizeBlockLabel(value) {
+  const label = value.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return label || "AGENT";
 }
 
 function isDuplicateTurn(turn) {
@@ -671,7 +729,7 @@ function renderTurns() {
 
     const speakerEl = document.createElement("span");
     speakerEl.className = "speaker";
-    speakerEl.textContent = `${turn.speaker}:`;
+    speakerEl.textContent = `${getTurnSpeakerDisplayName(turn.speaker)}:`;
 
     const targetEl = document.createElement("span");
     targetEl.textContent = turn.target ? `to ${turn.target}` : "";
@@ -699,6 +757,30 @@ function renderTurns() {
   }
 
   turnsEl.scrollTop = turnsEl.scrollHeight;
+}
+
+function getTurnSpeakerDisplayName(speaker) {
+  if (speaker === "ChatGPT") {
+    return getAgentName(TARGETS.chatgpt);
+  }
+
+  if (speaker === "Gemini") {
+    return getAgentName(TARGETS.gemini);
+  }
+
+  return speaker;
+}
+
+function getTargetKeyForSpeaker(speaker) {
+  if (speaker === "ChatGPT") {
+    return "chatgpt";
+  }
+
+  if (speaker === "Gemini") {
+    return "gemini";
+  }
+
+  return "";
 }
 
 function formatTimestampForDisplay(value) {
@@ -731,10 +813,43 @@ function normalizeCouncilSession(value) {
     title: value?.title || "Council Bridge",
     createdAt,
     paused: Boolean(value?.paused),
+    nicknames: {
+      chatgpt: normalizeNickname(value?.nicknames?.chatgpt) || TARGETS.chatgpt.defaultNickname,
+      gemini: normalizeNickname(value?.nicknames?.gemini) || TARGETS.gemini.defaultNickname
+    },
+    botToBot: normalizeBotToBotState(value?.botToBot),
     members: {
       chatgpt: normalizeCouncilMember(value?.members?.chatgpt, "chatgpt"),
       gemini: normalizeCouncilMember(value?.members?.gemini, "gemini")
     }
+  };
+}
+
+function normalizeBotToBotState(value) {
+  return {
+    enabled: value?.enabled !== false,
+    mode: value?.mode || "manual_approval",
+    maxTurns: Number(value?.maxTurns) > 0 ? Number(value.maxTurns) : 3,
+    currentTurnCount: Math.max(0, Number(value?.currentTurnCount) || 0),
+    approvedTurnsRemaining: Math.max(0, Number(value?.approvedTurnsRemaining) || 0),
+    pendingHandoff: normalizePendingHandoff(value?.pendingHandoff)
+  };
+}
+
+function normalizePendingHandoff(value) {
+  if (!value?.id || value.status !== "pending") {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    fromAgent: value.fromAgent || "",
+    toAgent: value.toAgent || "",
+    sourceMessageId: value.sourceMessageId || "",
+    detectedTag: value.detectedTag || "",
+    body: value.body || "",
+    createdAt: Number(value.createdAt) || Date.now(),
+    status: "pending"
   };
 }
 
@@ -751,6 +866,7 @@ function normalizeCouncilMember(member, key) {
     currentWindowId: Number.isInteger(member.currentWindowId) ? member.currentWindowId : member.windowId,
     url: member.url || "",
     displayName: member.displayName || "",
+    nickname: normalizeNickname(member.nickname || ""),
     role: member.role || "agent",
     status: member.status || "connected",
     assignedAt: Number(member.assignedAt) || Date.now()
@@ -782,6 +898,7 @@ async function setActiveTabAsCouncilMember(target) {
         currentWindowId: activeTab.windowId,
         url: activeTab.url,
         displayName: target.label,
+        nickname: getAgentName(target),
         role: "agent",
         status: "connected",
         assignedAt: Date.now()
@@ -790,7 +907,7 @@ async function setActiveTabAsCouncilMember(target) {
   };
 
   await saveCouncilSession();
-  setStatus(`Set this tab as ${target.label}.`);
+  setStatus(`Set this tab as ${getAgentName(target)}.`);
 }
 
 async function removeActiveTabFromCouncil() {
@@ -802,6 +919,7 @@ async function removeActiveTabFromCouncil() {
     return;
   }
 
+  const removedName = getAgentName(TARGETS[memberKey]);
   stopReplyWatcher(TARGETS[memberKey].label);
   councilSession = {
     ...councilSession,
@@ -812,7 +930,7 @@ async function removeActiveTabFromCouncil() {
   };
 
   await saveCouncilSession();
-  setStatus(`Removed ${TARGETS[memberKey].label} from the council.`);
+  setStatus(`Removed ${removedName} from the council.`);
 }
 
 async function toggleCapturePause() {
@@ -835,17 +953,254 @@ async function saveCouncilSession() {
   councilSession = normalizeCouncilSession(councilSession);
   await chrome.storage.local.set({ [STORAGE_KEYS.session]: councilSession });
   renderCouncilSession();
+  renderHandoffPanel();
 }
 
 function renderCouncilSession() {
-  const lobo = formatCouncilMember(councilSession.members.chatgpt, "not set");
+  chatgptNicknameEl.value = getAgentName(TARGETS.chatgpt);
+  geminiNicknameEl.value = getAgentName(TARGETS.gemini);
+
+  const chatgpt = formatCouncilMember(councilSession.members.chatgpt, "not set");
   const gemini = formatCouncilMember(councilSession.members.gemini, "not set");
   const state = councilSession.paused ? "paused" : "active";
 
   sessionSummaryEl.textContent = `Council capture: ${state}
-Lobo: ${lobo}
+ChatGPT: ${chatgpt}
 Gemini: ${gemini}`;
   toggleCapturePauseButton.textContent = councilSession.paused ? "Resume capture" : "Pause capture";
+}
+
+function renderHandoffPanel() {
+  const pending = councilSession.botToBot.pendingHandoff;
+
+  if (!pending) {
+    handoffPanelEl.classList.remove("visible");
+    handoffNoticeEl.textContent = "";
+    return;
+  }
+
+  const fromName = TARGETS[pending.fromAgent] ? getAgentName(TARGETS[pending.fromAgent]) : pending.fromAgent;
+  const toName = TARGETS[pending.toAgent] ? getAgentName(TARGETS[pending.toAgent]) : pending.toAgent;
+  handoffPanelEl.classList.add("visible");
+  handoffNoticeEl.textContent = `${fromName} wants to pass the mic to ${toName}.`;
+}
+
+function getAddedTurns(previousTurns, nextTurns) {
+  const previousIds = new Set(previousTurns.map((turn) => turn.id));
+  return nextTurns.filter((turn) => !previousIds.has(turn.id));
+}
+
+async function detectBotHandoffForTurn(turn) {
+  if (!councilSession.botToBot.enabled || councilSession.botToBot.pendingHandoff) {
+    return;
+  }
+
+  const fromAgent = getTargetKeyForSpeaker(turn.speaker);
+
+  if (!fromAgent) {
+    return;
+  }
+
+  if (String(turn.text || "").trimStart().startsWith("[Council Bridge]")) {
+    return;
+  }
+
+  const detected = parseLeadingHandoffTag(turn.text, fromAgent);
+
+  if (!detected) {
+    return;
+  }
+
+  const target = TARGETS[detected.toAgent];
+  const targetTab = await getCouncilTabForTarget(target);
+
+  if (!targetTab) {
+    console.info(`[CouncilBridge][HANDOFF_BLOCKED] reason=target_stale from=${fromAgent} to=${detected.toAgent}`);
+    setStatus(`[CouncilBridge] Handoff blocked: ${getAgentName(target)} is stale or disconnected.`);
+    return;
+  }
+
+  const handoff = {
+    id: `handoff_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+    fromAgent,
+    toAgent: detected.toAgent,
+    sourceMessageId: turn.id,
+    detectedTag: detected.tag,
+    body: turn.text,
+    createdAt: Date.now(),
+    status: "pending"
+  };
+
+  console.info(`[CouncilBridge][BOT_TAG_DETECTED] from=${fromAgent} to=${detected.toAgent} tag=${detected.tag} messageId=${turn.id}`);
+  console.info(`[CouncilBridge][HANDOFF_PENDING] id=${handoff.id} from=${fromAgent} to=${detected.toAgent}`);
+
+  councilSession = {
+    ...councilSession,
+    botToBot: {
+      ...councilSession.botToBot,
+      pendingHandoff: handoff
+    }
+  };
+
+  await saveCouncilSession();
+
+  if (shouldAutoApprovePendingHandoff()) {
+    await approvePendingHandoff();
+    return;
+  }
+
+  if (councilSession.botToBot.currentTurnCount >= councilSession.botToBot.maxTurns) {
+    console.info(`[CouncilBridge][BOT_HANDOFF_LIMIT_REACHED] count=${councilSession.botToBot.currentTurnCount}`);
+    setStatus("[CouncilBridge] Bot-to-bot handoff limit reached. Waiting for Human Gavel.");
+  }
+}
+
+function parseLeadingHandoffTag(text, fromAgent) {
+  const tagMatch = String(text || "").trimStart().match(/^@([a-z0-9_-]+)[,:;.!?]?(?=\s|$)/i);
+
+  if (!tagMatch) {
+    return null;
+  }
+
+  const target = getTargetFromComposerTag(tagMatch[0]);
+
+  if (!target || target === "both" || target.key === fromAgent) {
+    return null;
+  }
+
+  return {
+    tag: tagMatch[0],
+    toAgent: target.key
+  };
+}
+
+function shouldAutoApprovePendingHandoff() {
+  return (
+    councilSession.botToBot.approvedTurnsRemaining > 0 &&
+    councilSession.botToBot.currentTurnCount < councilSession.botToBot.maxTurns
+  );
+}
+
+async function approvePendingHandoff(turnBudget = null) {
+  const pending = councilSession.botToBot.pendingHandoff;
+  const manualRequest = turnBudget !== null;
+
+  if (!pending) {
+    setStatus("No pending handoff.");
+    return;
+  }
+
+  if (manualRequest && councilSession.botToBot.currentTurnCount >= councilSession.botToBot.maxTurns) {
+    councilSession = {
+      ...councilSession,
+      botToBot: {
+        ...councilSession.botToBot,
+        currentTurnCount: 0
+      }
+    };
+  }
+
+  if (Number.isInteger(turnBudget) && turnBudget > 0) {
+    councilSession = {
+      ...councilSession,
+      botToBot: {
+        ...councilSession.botToBot,
+        approvedTurnsRemaining: Math.max(councilSession.botToBot.approvedTurnsRemaining, turnBudget)
+      }
+    };
+  }
+
+  if (councilSession.botToBot.currentTurnCount >= councilSession.botToBot.maxTurns) {
+    console.info(`[CouncilBridge][BOT_HANDOFF_LIMIT_REACHED] count=${councilSession.botToBot.currentTurnCount}`);
+    setStatus("[CouncilBridge] Bot-to-bot handoff limit reached. Waiting for Human Gavel.");
+    councilSession = {
+      ...councilSession,
+      botToBot: {
+        ...councilSession.botToBot,
+        approvedTurnsRemaining: 0
+      }
+    };
+    await saveCouncilSession();
+    return;
+  }
+
+  const target = TARGETS[pending.toAgent];
+  const targetTab = await getCouncilTabForTarget(target);
+
+  if (!targetTab) {
+    console.info(`[CouncilBridge][HANDOFF_BLOCKED] reason=target_stale from=${pending.fromAgent} to=${pending.toAgent}`);
+    setStatus(`[CouncilBridge] Handoff blocked: ${getAgentName(target)} is stale or disconnected.`);
+    return;
+  }
+
+  console.info(`[CouncilBridge][HANDOFF_APPROVED] id=${pending.id}`);
+
+  const sent = await sendToTarget(target);
+
+  if (!sent) {
+    return;
+  }
+
+  const nextTurnCount = councilSession.botToBot.currentTurnCount + 1;
+  const nextRemaining = Math.max(0, councilSession.botToBot.approvedTurnsRemaining - 1);
+  console.info(`[CouncilBridge][BOT_TURN_COUNT] count=${nextTurnCount} max=${councilSession.botToBot.maxTurns}`);
+
+  councilSession = {
+    ...councilSession,
+    botToBot: {
+      ...councilSession.botToBot,
+      currentTurnCount: nextTurnCount,
+      approvedTurnsRemaining: nextRemaining,
+      pendingHandoff: null
+    }
+  };
+
+  await saveCouncilSession();
+
+  if (nextTurnCount >= councilSession.botToBot.maxTurns) {
+    console.info(`[CouncilBridge][BOT_HANDOFF_LIMIT_REACHED] count=${nextTurnCount}`);
+    setStatus("[CouncilBridge] Bot-to-bot handoff limit reached. Waiting for Human Gavel.");
+  }
+}
+
+async function rejectPendingHandoff() {
+  const pending = councilSession.botToBot.pendingHandoff;
+
+  if (!pending) {
+    setStatus("No pending handoff.");
+    return;
+  }
+
+  console.info(`[CouncilBridge][HANDOFF_REJECTED] id=${pending.id}`);
+  councilSession = {
+    ...councilSession,
+    botToBot: {
+      ...councilSession.botToBot,
+      approvedTurnsRemaining: 0,
+      pendingHandoff: null
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus("Handoff rejected.");
+}
+
+async function resetBotToBotTurnCount() {
+  if (councilSession.botToBot.currentTurnCount === 0 && councilSession.botToBot.approvedTurnsRemaining === 0) {
+    return;
+  }
+
+  councilSession = {
+    ...councilSession,
+    botToBot: {
+      ...councilSession.botToBot,
+      currentTurnCount: 0,
+      approvedTurnsRemaining: 0,
+      pendingHandoff: null
+    }
+  };
+
+  await saveCouncilSession();
 }
 
 function formatCouncilMember(member, fallback) {
@@ -854,6 +1209,30 @@ function formatCouncilMember(member, fallback) {
   }
 
   return `${member.status}; ${shortenId(member.conversationId)}; tab ${member.currentTabId || "?"}`;
+}
+
+async function saveNickname(target, rawValue) {
+  const nickname = normalizeNickname(rawValue) || target.defaultNickname || target.label;
+  const currentMember = councilSession.members[target.key];
+
+  councilSession = {
+    ...councilSession,
+    nicknames: {
+      ...councilSession.nicknames,
+      [target.key]: nickname
+    },
+    members: {
+      ...councilSession.members,
+      [target.key]: currentMember ? { ...currentMember, nickname } : null
+    }
+  };
+
+  await saveCouncilSession();
+  setStatus(`Saved ${target.label} nickname as ${nickname}.`);
+}
+
+function normalizeNickname(value) {
+  return String(value || "").trim().slice(0, 40);
 }
 
 async function clearConversation() {

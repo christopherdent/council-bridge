@@ -19,10 +19,10 @@ Council Bridge only works with the exact ChatGPT and Gemini conversations you as
 
 ### Start a Council
 
-1. Open the ChatGPT conversation you want to use as Lobo.
+1. Open the ChatGPT conversation you want to use in the council.
 2. Open the Gemini conversation you want to use as Gemini.
 3. Click the Council Bridge extension icon to open the side panel.
-4. While the ChatGPT conversation is the active browser tab, click `Set as Lobo`.
+4. While the ChatGPT conversation is the active browser tab, click `Set as ChatGPT`.
 5. While the Gemini conversation is the active browser tab, click `Set as Gemini`.
 6. Confirm the side panel shows both members as connected.
 
@@ -37,7 +37,7 @@ The current tab ID is only a routing address. If Chrome reloads or reopens the s
 
 Type in the side panel composer and click `Send`.
 
-Default behavior sends to both Lobo and Gemini. Use a leading routing tag to send to one agent:
+Default behavior sends to both ChatGPT and Gemini. Use a leading routing tag to send to one agent:
 
 ```text
 @gemini What do you think?
@@ -57,13 +57,55 @@ Use these tags to explicitly send to both:
 
 Routing tags must be at the start of the message. Tags are not stripped; they stay in the stored and sent message text.
 
+### Nicknames
+
+ChatGPT and Gemini are the default names. Use the nickname fields in the side panel to rename either council member for transcript display and prompt wording.
+
+Nicknames can also be used as leading route tags. For example, if ChatGPT is nicknamed `Lobo`, then `@lobo` routes only to ChatGPT. Built-in aliases still work:
+
+- ChatGPT: `@chatgpt`, `@gpt`, `@lobo`
+- Gemini: `@gemini`, `@gem`
+- Both: `@both`, `@all`, `@council`
+
 When Council Bridge sends to an agent, it includes every transcript turn that agent has not seen since it was last advised. It does not resend the whole transcript every time.
+
+### Bot-to-Bot Handoffs
+
+Assistant replies can request a controlled handoff by starting their response with a route tag for the other council member.
+
+Examples that create a pending handoff:
+
+```text
+@lobo can you review this?
+@gemini what do you think?
+```
+
+Examples that do not create a handoff:
+
+```text
+I think @lobo should review this later.
+Ah, @gemini can you check this?
+Here is a note: @gemini
+```
+
+Only leading tags count. Council Bridge creates a pending handoff instead of sending automatically. The side panel shows a Human Gavel notice with:
+
+- `Approve handoff`
+- `Reject handoff`
+- `Approve next 1 turn`
+- `Approve next 3 turns`
+
+`Approve handoff` sends only the current pending handoff. `Approve next 1 turn` and `Approve next 3 turns` grant a short bot-to-bot budget so the next tagged assistant replies can continue automatically until the budget or safety limit is reached.
+
+The default bot-to-bot safety limit is 3 turns. When the limit is reached, Council Bridge stops routing and waits for the Human Gavel. Any new Christopher message resets the bot-to-bot turn count.
+
+Handoffs are blocked if the target member is stale, disconnected, or not assigned to the current council session.
 
 ### Capture Replies
 
 Completed ChatGPT and Gemini replies are added automatically after their visible response text stops changing.
 
-Use `Refresh replies` to manually pull the latest visible reply from both registered council agents. It refreshes Lobo and Gemini, not random tabs.
+Use `Refresh replies` to manually pull the latest visible reply from both registered council agents. It refreshes ChatGPT and Gemini, not random tabs.
 
 Use `Add selection` to add highlighted text from the active council tab to the side panel without sending it anywhere.
 
@@ -79,7 +121,7 @@ Use `Clear` to clear the side panel transcript and delivery cursors. This does n
 
 ### Timestamps and Transcript
 
-Every side panel turn shows a millisecond timestamp. Prompt payloads sent to Lobo or Gemini include those timestamps too, so test runs can be traced precisely.
+Every side panel turn shows a millisecond timestamp. Prompt payloads sent to ChatGPT or Gemini include those timestamps too, so test runs can be traced precisely.
 
 The side panel transcript stores only text Council Bridge captures, refreshes, or sends. It does not scrape full conversations.
 
@@ -88,7 +130,7 @@ The Gemini-to-ChatGPT wrapped prompt uses this format:
 ```text
 [Council Bridge]
 Source: Gemini
-Target: ChatGPT / Lobo
+Target: ChatGPT
 
 Gemini said:
 
@@ -96,14 +138,14 @@ Gemini said:
 Selected text
 --- END GEMINI MESSAGE ---
 
-Lobo, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.
+ChatGPT, please respond to Christopher and Gemini. Agree, disagree, refine the plan, and turn it into concrete next steps.
 ```
 
 ## Known Limitations
 
 - Does not scrape full conversations
 - The side panel conversation view only stores snippets you explicitly pass or type
-- Only conversations assigned as Lobo or Gemini in the active council session participate
+- Only conversations assigned as ChatGPT or Gemini in the active council session participate
 - Side panel send/pass actions try to click send
 - Auto-submit depends on finding an enabled send button
 - Refresh replies uses best-effort selectors for the latest visible ChatGPT and Gemini response
