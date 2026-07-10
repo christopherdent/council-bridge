@@ -18,6 +18,7 @@ const TARGET_READY_POLL_MS = 500;
 const TARGET_READY_TIMEOUT_MS = 5 * 60 * 1000;
 const TYPEWRITER_INTERVAL_MS = 28;
 const TYPEWRITER_MAX_DURATION_MS = 600;
+const ASSISTANT_REVEAL_GAP_MS = 2000;
 const PENDING_CONVERSATION_PREFIX = "pending";
 
 const TARGETS = {
@@ -107,6 +108,8 @@ let handoffReadinessCheckInFlight = false;
 let renderedTurnIds = new Set();
 const animatedTurnTextById = new Map();
 const typewriterTimers = new Map();
+const revealTimers = new Map();
+let nextAssistantRevealAt = 0;
 
 document.addEventListener("DOMContentLoaded", loadPanelState);
 passSelectionButton.addEventListener("click", passSelectionToOtherAi);
@@ -146,7 +149,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
       ...addedTurns,
       ...getUpdatedTurns(previousTurns, turns)
     ];
-    prepareTypewriterForAddedTurns(addedTurns);
+    scheduleRevealForAddedTurns(addedTurns);
   }
 
   if (changes[STORAGE_KEYS.deliveryState]) {
@@ -157,7 +160,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
     councilSession = normalizeCouncilSession(changes[STORAGE_KEYS.session].newValue);
   }
 
-  reconcileRenderedTurns();
+  renderTurns();
   renderCouncilSession();
   renderHandoffPanel();
 
@@ -540,20 +543,21 @@ async function appendTurn(turn, options = {}) {
   }
 
   const createdAt = Date.now();
+  const nextTurn = {
+    id: `${createdAt}-${Math.random().toString(16).slice(2)}`,
+    createdAt,
+    speaker: turn.speaker,
+    text: turn.text,
+    target: turn.target,
+    recipients: Array.isArray(turn.recipients) ? turn.recipients : undefined
+  };
   const nextTurns = [
     ...turns,
-    {
-      id: `${createdAt}-${Math.random().toString(16).slice(2)}`,
-      createdAt,
-      speaker: turn.speaker,
-      text: turn.text,
-      target: turn.target,
-      recipients: Array.isArray(turn.recipients) ? turn.recipients : undefined
-    }
+    nextTurn
   ].slice(-MAX_TURNS);
 
   turns = nextTurns;
-  reconcileRenderedTurns();
+  scheduleRevealForAddedTurns([nextTurn]);
   await chrome.storage.local.set({ [STORAGE_KEYS.turns]: nextTurns });
   return true;
 }
@@ -877,13 +881,39 @@ function getReplySignature(text) {
   return normalizeText(text);
 }
 
-function prepareTypewriterForAddedTurns(addedTurns) {
+function scheduleRevealForAddedTurns(addedTurns) {
+  const now = Date.now();
+  let renderedImmediately = false;
+
   for (const turn of addedTurns) {
-    if (!isAgentSpeaker(turn.speaker) || !turn.text) {
+    if (renderedTurnIds.has(turn.id)) {
       continue;
     }
 
-    startTypewriterForTurn(turn);
+    if (!isAgentSpeaker(turn.speaker)) {
+      renderedTurnIds.add(turn.id);
+      renderedImmediately = true;
+      continue;
+    }
+
+    const revealAt = Math.max(now, nextAssistantRevealAt);
+    nextAssistantRevealAt = revealAt + ASSISTANT_REVEAL_GAP_MS;
+    const delayMs = revealAt - now;
+
+    if (delayMs <= 0) {
+      revealTurn(turn.id);
+      continue;
+    }
+
+    const timerId = window.setTimeout(() => {
+      revealTimers.delete(turn.id);
+      revealTurn(turn.id);
+    }, delayMs);
+    revealTimers.set(turn.id, timerId);
+  }
+
+  if (renderedImmediately) {
+    renderTurns();
   }
 }
 
@@ -944,11 +974,34 @@ function clearTypewriterTimers() {
   animatedTurnTextById.clear();
 }
 
-function reconcileRenderedTurns() {
-  revealAllTurnsImmediately();
+function clearRevealTimers() {
+  for (const timerId of revealTimers.values()) {
+    window.clearTimeout(timerId);
+  }
+
+  revealTimers.clear();
+  nextAssistantRevealAt = 0;
+}
+
+function revealTurn(turnId) {
+  const turn = turns.find((candidate) => candidate.id === turnId);
+
+  if (!turn) {
+    return;
+  }
+
+  renderedTurnIds.add(turn.id);
+
+  if (isAgentSpeaker(turn.speaker) && turn.text) {
+    startTypewriterForTurn(turn);
+    return;
+  }
+
+  renderTurns();
 }
 
 function revealAllTurnsImmediately() {
+  clearRevealTimers();
   renderedTurnIds = new Set(turns.map((turn) => turn.id));
   renderTurns();
 }
@@ -1648,6 +1701,7 @@ async function clearConversation() {
   turns = [];
   deliveryState = normalizeDeliveryState();
   clearTypewriterTimers();
+  clearRevealTimers();
   revealAllTurnsImmediately();
   await chrome.storage.local.set({
     [STORAGE_KEYS.turns]: [],
