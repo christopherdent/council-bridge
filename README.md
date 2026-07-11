@@ -1,5 +1,7 @@
 # Council Bridge
 
+Council Bridge is a human-directed project-state synchronization system that enables bounded adversarial reasoning between independent agents while preserving human authority over goals, constraints, and final decisions.
+
 Council Bridge is a tiny Chrome and Edge extension for coordinating assigned ChatGPT and Gemini browser tabs from a persistent side panel. It tracks typed human turns and captured assistant replies, wraps unseen turns in direction-specific prompts, inserts them into the target service, and clicks send from the side panel.
 
 The extension uses a persistent side panel instead of a toolbar dropdown. Existing ChatGPT and Gemini tabs receive prompts through the assigned Council conversations. While a reply is outstanding, Council Bridge keeps the expected responder active and selectively reactivates only responders whose output has stopped progressing. When the replies finish, it restores the prior non-Council tab when doing so will not override a tab you selected yourself. The side panel shows text you write as yourself, latest replies you refresh, and automatically captured completed AI replies. Every side panel turn shows a millisecond timestamp, and prompts include the same turn timestamp for testing and traceability.
