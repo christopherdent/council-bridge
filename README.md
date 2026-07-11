@@ -93,7 +93,7 @@ With Roundtable mode off, Council Bridge is in Fluid mode: group messages are su
 
 In Roundtable mode, a group send goes to one council member first. When that reply is captured, Council Bridge sends the still-unseen context to the other member, so the second response includes the human user's message plus the first agent's answer. The starting member alternates each round.
 
-Single-member route tags still send directly to that member. Bot-to-bot Human Gavel handoffs still work for normal assistant replies outside the active Roundtable pass.
+When the human user sends a single-member route tag during an active Roundtable, Council Bridge immediately ends that Roundtable transaction, cancels any queued autonomous continuation, and sends directly to the tagged member. Roundtable mode remains enabled for the next untagged group message. Bot-to-bot Human Gavel handoffs still work for normal assistant replies outside the active Roundtable pass.
 
 Enable `Have at it` under Roundtable mode to let the two agents continue the same topic for a bounded number of alternating turns without requiring tags or Human Gavel approval between turns. Set the turn count from 2 through 10. The starting member still alternates between separate Roundtables, each transaction has one deterministic expected responder at a time, and the final autonomous turn is instructed to synthesize the strongest conclusion, remaining disagreement, and next step for the human user.
 
@@ -142,9 +142,9 @@ Completed ChatGPT and Gemini replies are added automatically after their visible
 
 Use `Refresh replies` to manually pull the latest visible reply from both registered council agents. It refreshes ChatGPT and Gemini, not random tabs.
 
-Use `New GPT` or `New Gem` in Council setup when a ChatGPT or Gemini tab gets slow. Council Bridge opens a fresh tab, assigns it as that council member, and seeds it with a bounded recent-context packet so it can rejoin the wider discussion. The seed prompt is intentionally compact; it asks the agent to acknowledge that it is caught up rather than replaying the whole transcript.
+Use `New GPT` or `New Gem` in Council setup when a ChatGPT or Gemini tab gets slow. Council Bridge opens a fresh tab, assigns it as that council member, and seeds it with a bounded recent-context packet so it can rejoin the wider discussion. After the replacement accepts the seeded prompt, Council Bridge closes the previous assigned tab. The old tab is left open if replacement setup fails. The seed prompt is intentionally compact; it asks the agent to acknowledge that it is caught up rather than replaying the whole transcript.
 
-`Recover stalled replies` performs the same replacement automatically when an expected responder produces no captured reply for the selected 5, 7, or 10 minute timeout. Recovery makes one attempt for that outstanding reply: it opens a fresh inactive tab, replaces only the stalled member's routing address, seeds recent Council context, and asks the replacement to answer the latest outstanding request. If the replacement also stalls, Council Bridge stops after the hard timeout instead of opening tabs indefinitely.
+`Recover stalled replies` performs the same replacement automatically when an expected responder produces no captured reply for the selected 5, 7, or 10 minute timeout. Recovery makes one attempt for that outstanding reply: it opens a fresh inactive tab, replaces only the stalled member's routing address, seeds recent Council context, asks the replacement to answer the latest outstanding request, and closes the lagged tab after successful submission. If the replacement also stalls, Council Bridge stops after the hard timeout instead of opening tabs indefinitely.
 
 ### Active Page Context
 

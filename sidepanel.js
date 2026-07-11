@@ -265,6 +265,7 @@ async function sendComposer() {
   }
 
   if (route.targets.length === 1) {
+    await endRoundtableForHumanTag(route.targets[0]);
     await sendComposerToTarget(route.targets[0], route.text);
     return;
   }
@@ -405,6 +406,7 @@ async function sendComposerRoundtable(text) {
 
     const sent = await sendToTarget(firstTarget, {
       roundtable: {
+        transactionId: councilSession.roundtable.pending.id,
         position: "first",
         turnNumber: 1,
         maxTurns: councilSession.roundtable.pending.maxTurns,
@@ -413,7 +415,9 @@ async function sendComposerRoundtable(text) {
     });
 
     if (!sent) {
-      await clearRoundtablePending("Roundtable could not send the first turn.");
+      if (councilSession.roundtable.pending?.sourceTurnId === sourceTurn?.id) {
+        await clearRoundtablePending("Roundtable could not send the first turn.");
+      }
       return;
     }
 
@@ -542,6 +546,11 @@ async function performSendToTarget(target, options = {}) {
     return true;
   }
 
+  if (!isCurrentRoundtableSend(options.roundtable)) {
+    console.info(`[CouncilBridge][ROUNDTABLE_SEND_CANCELLED] id=${options.roundtable.transactionId} target=${target.key} reason=transaction_ended`);
+    return false;
+  }
+
   const latestReplyBeforeSend = await getLatestReplyTextFromTarget(target).catch(() => "");
   let prompt = target.wrapTurns(turnsToSend, {
     includeCouncilOverview: !hasTargetBeenAdvised(target)
@@ -553,6 +562,14 @@ async function performSendToTarget(target, options = {}) {
 
   if (!councilSession.paused) {
     await captureResponderAttentionOrigin();
+  }
+
+  if (!isCurrentRoundtableSend(options.roundtable)) {
+    console.info(`[CouncilBridge][ROUNDTABLE_SEND_CANCELLED] id=${options.roundtable.transactionId} target=${target.key} reason=transaction_ended`);
+    return false;
+  }
+
+  if (!councilSession.paused) {
     startReplyWatcher(target, latestReplyBeforeSend);
   }
 
@@ -590,6 +607,10 @@ async function performSendToTarget(target, options = {}) {
 
   setStatus(`Could not find ${getAgentName(target)}'s prompt box.`);
   return false;
+}
+
+function isCurrentRoundtableSend(roundtable) {
+  return !roundtable?.transactionId || councilSession.roundtable.pending?.id === roundtable.transactionId;
 }
 
 async function waitForTargetReadyToSend(target, tabId) {
@@ -1577,6 +1598,7 @@ async function removeActiveTabFromCouncil() {
 async function startFreshCouncilChat(target, options = {}) {
   try {
     const nickname = getAgentName(target);
+    const previousTabId = councilSession.members[target.key]?.currentTabId;
     const tab = await chrome.tabs.create({
       url: target.openUrl,
       active: !options.automaticRecovery
@@ -1637,6 +1659,7 @@ async function startFreshCouncilChat(target, options = {}) {
       if (contextTurns.length > 0) {
         await markTargetAdvised(target, contextTurns);
       }
+      await closeReplacedCouncilTab(target, previousTabId, currentTab.id);
       console.info(`[CouncilBridge][FRESH_CHAT_READY] target=${target.key} automaticRecovery=${Boolean(options.automaticRecovery)}`);
       setStatus(options.automaticRecovery
         ? `Recovered ${nickname} in a fresh chat with the outstanding request.`
@@ -1649,6 +1672,19 @@ async function startFreshCouncilChat(target, options = {}) {
   } catch (error) {
     stopReplyWatcher(target.label);
     setStatus(`Fresh chat failed: ${getErrorMessage(error)}`);
+  }
+}
+
+async function closeReplacedCouncilTab(target, previousTabId, replacementTabId) {
+  if (!Number.isInteger(previousTabId) || previousTabId === replacementTabId) {
+    return;
+  }
+
+  try {
+    await chrome.tabs.remove(previousTabId);
+    console.info(`[CouncilBridge][REPLACED_TAB_CLOSED] target=${target.key} oldTabId=${previousTabId} newTabId=${replacementTabId}`);
+  } catch (error) {
+    console.info(`[CouncilBridge][REPLACED_TAB_CLOSE_SKIPPED] target=${target.key} oldTabId=${previousTabId} error=${getErrorMessage(error)}`);
   }
 }
 
@@ -1933,11 +1969,20 @@ async function continueRoundtableForTurn(turn) {
   };
   await saveCouncilSession();
 
+  if (
+    councilSession.roundtable.pending?.id !== pending.id ||
+    councilSession.roundtable.pending?.expectedAgent !== result.nextAgent
+  ) {
+    console.info(`[CouncilBridge][ROUNDTABLE_ADVANCE_CANCELLED] id=${pending.id} reason=transaction_ended`);
+    return true;
+  }
+
   const nextTurnNumber = nextPending.completedTurns + 1;
   setStatus(`Roundtable: turn ${nextTurnNumber} of ${nextPending.maxTurns} goes to ${getAgentName(nextTarget)}.`);
 
   const sent = await sendToTarget(nextTarget, {
     roundtable: {
+      transactionId: pending.id,
       position: nextTurnNumber === 2 ? "second" : "continuation",
       priorName: getAgentName(previousTarget),
       turnNumber: nextTurnNumber,
@@ -1947,7 +1992,9 @@ async function continueRoundtableForTurn(turn) {
   });
 
   if (!sent) {
-    await clearRoundtablePending(`Roundtable could not send turn ${nextTurnNumber}.`);
+    if (councilSession.roundtable.pending?.id === pending.id) {
+      await clearRoundtablePending(`Roundtable could not send turn ${nextTurnNumber}.`);
+    }
     return true;
   }
 
@@ -2031,6 +2078,26 @@ async function resetRoundtablePendingForChristopher() {
 
   await saveCouncilSession();
   console.info(`[CouncilBridge][ROUNDTABLE_CANCELLED] id=${pending.id} reason=new_christopher_turn`);
+}
+
+async function endRoundtableForHumanTag(target) {
+  const pending = councilSession.roundtable.pending;
+
+  if (!pending) {
+    return;
+  }
+
+  cancelQueuedTargetSends("human_tagged_agent");
+  councilSession = {
+    ...councilSession,
+    roundtable: {
+      ...councilSession.roundtable,
+      pending: null
+    }
+  };
+  await saveCouncilSession();
+  console.info(`[CouncilBridge][ROUNDTABLE_CANCELLED] id=${pending.id} reason=human_tag target=${target.key}`);
+  setStatus(`Roundtable stopped; sending directly to ${getAgentName(target)}.`);
 }
 
 function getAddedTurns(previousTurns, nextTurns) {
