@@ -96,9 +96,6 @@ const roundtableTurnLimitEl = document.getElementById("roundtableTurnLimit");
 const autoRecoveryEl = document.getElementById("autoRecovery");
 const recoveryTimeoutEl = document.getElementById("recoveryTimeout");
 const attachPageContextButton = document.getElementById("attachPageContext");
-const pageContextAttachmentEl = document.getElementById("pageContextAttachment");
-const pageContextTitleEl = document.getElementById("pageContextTitle");
-const removePageContextButton = document.getElementById("removePageContext");
 const handoffPanelEl = document.getElementById("handoffPanel");
 const handoffNoticeEl = document.getElementById("handoffNotice");
 const approveHandoffButton = document.getElementById("approveHandoff");
@@ -151,8 +148,7 @@ roundtableAutonomousEl.addEventListener("change", saveRoundtableAutonomy);
 roundtableTurnLimitEl.addEventListener("change", saveRoundtableAutonomy);
 autoRecoveryEl.addEventListener("change", saveRecoverySettings);
 recoveryTimeoutEl.addEventListener("change", saveRecoverySettings);
-attachPageContextButton.addEventListener("click", attachActivePageContext);
-removePageContextButton.addEventListener("click", clearAttachedPageContext);
+attachPageContextButton.addEventListener("click", toggleActivePageContext);
 approveHandoffButton.addEventListener("click", () => approvePendingHandoff(0));
 rejectHandoffButton.addEventListener("click", rejectPendingHandoff);
 approveOneHandoffButton.addEventListener("click", () => approvePendingHandoff(1));
@@ -2466,6 +2462,16 @@ async function attachActivePageContext() {
   }
 }
 
+async function toggleActivePageContext() {
+  if (attachedPageContext) {
+    clearAttachedPageContext();
+    setStatus("Page context removed.");
+    return;
+  }
+
+  await attachActivePageContext();
+}
+
 function extractPageContextFromDocument(limit) {
   const normalize = (value) => String(value || "")
     .replace(/[ \t]+/g, " ")
@@ -2517,10 +2523,14 @@ function clearAttachedPageContext() {
 }
 
 function renderPageContextAttachment() {
-  pageContextAttachmentEl.hidden = !attachedPageContext;
-  pageContextTitleEl.textContent = attachedPageContext
-    ? `Page: ${attachedPageContext.title || attachedPageContext.url}`
-    : "";
+  attachPageContextButton.classList.toggle("attached", Boolean(attachedPageContext));
+  attachPageContextButton.title = attachedPageContext
+    ? `Attached: ${attachedPageContext.title || attachedPageContext.url}. Click to remove.`
+    : "Attach context from the active non-chat page";
+  attachPageContextButton.setAttribute(
+    "aria-label",
+    attachedPageContext ? "Remove attached page context" : "Attach current page context"
+  );
 }
 
 async function getActiveTab() {

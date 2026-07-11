@@ -148,7 +148,7 @@ Use `New GPT` or `New Gem` in Council setup when a ChatGPT or Gemini tab gets sl
 
 ### Active Page Context
 
-Use the paperclip button above the composer to attach the currently active non-chat web page to your next message. Council Bridge asks for access to that site's origin when needed, then captures the page title, URL, selected text, and a bounded visible-text excerpt. The attachment appears beside the button and can be removed before sending.
+Use the paperclip button beside Refresh in the header to attach the currently active non-chat web page to your next message. Council Bridge asks for access to that site's origin when needed, then captures the page title, URL, selected text, and a bounded visible-text excerpt. The paperclip turns green while context is attached; click it again to remove the attachment before sending.
 
 Page context is explicit and one-shot: it is attached only after you click the button, it is sent only with the next human turn, and it is then cleared from the composer. ChatGPT and Gemini conversation tabs cannot be attached this way because their messages already flow through the Council transcript. Browser internal pages such as `chrome://` cannot be captured.
 

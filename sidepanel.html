@@ -122,6 +122,16 @@
         line-height: 1;
       }
 
+      button.icon-button.attached {
+        border-color: var(--chatgpt);
+        color: #ffffff;
+        background: var(--chatgpt);
+      }
+
+      button.icon-button.attached:hover {
+        background: #0b7657;
+      }
+
       .session-panel {
         display: grid;
         gap: 7px;
@@ -485,46 +495,6 @@
         gap: 6px;
       }
 
-      .composer-tools {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        min-width: 0;
-      }
-
-      .page-attachment {
-        display: flex;
-        align-items: center;
-        min-width: 0;
-        max-width: 100%;
-        gap: 5px;
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 4px 6px;
-        color: var(--muted);
-        background: var(--panel);
-        font-size: 11px;
-      }
-
-      .page-attachment[hidden] {
-        display: none;
-      }
-
-      .page-attachment-title {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .page-attachment button {
-        flex: 0 0 auto;
-        width: 22px;
-        height: 22px;
-        padding: 0;
-        line-height: 1;
-      }
-
       textarea {
         width: 100%;
         min-height: 68px;
@@ -555,6 +525,7 @@
           <h1>Council Bridge</h1>
           <div class="header-actions">
             <button id="refreshReplies" class="icon-button" type="button" title="Refresh latest replies" aria-label="Refresh latest replies">&#8635;</button>
+            <button id="attachPageContext" class="icon-button" type="button" title="Attach context from the active non-chat page" aria-label="Attach current page context">&#128206;</button>
             <button id="clearConversation" class="link" type="button">Clear</button>
           </div>
         </div>
@@ -618,13 +589,6 @@
       <section id="turns" class="turns" aria-label="Conversation"></section>
 
       <section class="composer" aria-label="Composer">
-        <div class="composer-tools">
-          <button id="attachPageContext" class="icon-button" type="button" title="Attach context from the active non-chat page" aria-label="Attach current page context">&#128206;</button>
-          <div id="pageContextAttachment" class="page-attachment" hidden>
-            <span id="pageContextTitle" class="page-attachment-title"></span>
-            <button id="removePageContext" type="button" title="Remove page context" aria-label="Remove page context">&times;</button>
-          </div>
-        </div>
         <textarea id="composerText" placeholder="Write as User..."></textarea>
         <div class="send-row">
           <button id="sendComposer" class="primary" type="button">Send</button>
